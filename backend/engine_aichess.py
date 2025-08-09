@@ -36,7 +36,7 @@ def _piece_to_cn(p: str) -> str:
 
 def _fen_to_aichess_board(fen: str):
     # lazy import aichess modules
-    from aichess.game import Board
+    from training_aichess.aichess.game import Board
     b, side = parse_fen(fen)
     board = Board()
     # Build state_list with vertical flip because our red is bottom, aichess red is top
@@ -69,7 +69,7 @@ def _fen_to_aichess_board(fen: str):
 
 def _aichess_action_to_move_dict(act_id: int) -> Dict[str, int]:
     # Convert aichess move id -> our move dict {fr,fc,tr,tc}
-    from aichess.game import move_id2move_action
+    from training_aichess.aichess.game import move_id2move_action
     s = move_id2move_action[act_id]
     ay, ax, by, bx = int(s[0]), int(s[1]), int(s[2]), int(s[3])
     # Convert from aichess coords (top=0) back to ours (top=0 but our red was bottom so we flipped earlier):
@@ -84,10 +84,10 @@ def best_move_aichess(fen: str, model_path: str | None, use_mcts: bool = True, n
     # Build board
     board, side = _fen_to_aichess_board(fen)
     # Load policy-value net
-    from aichess.pytorch_net import PolicyValueNet
+    from training_aichess.aichess.pytorch_net import PolicyValueNet
     pv = PolicyValueNet(model_file=model_path) if model_path else PolicyValueNet()
     if use_mcts:
-        from aichess.mcts import MCTSPlayer
+        from training_aichess.aichess.mcts import MCTSPlayer
         player = MCTSPlayer(pv.policy_value_fn, c_puct=c_puct, n_playout=n_playout, is_selfplay=0)
         # aichess board class used in MCTSPlayer expects their Board object
         move_id = player.get_action(board, temp=1e-3, return_prob=0)

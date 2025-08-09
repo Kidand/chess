@@ -12,10 +12,10 @@ import pickle
 import time
 from tqdm import tqdm
 
-from ..aichess.collect import CollectPipeline
-from ..aichess.collect import zip_array
-from ..aichess.config import CONFIG
-from ..aichess.pytorch_net import PolicyValueNet
+from aichess.collect import CollectPipeline
+from aichess.collect import zip_array
+from aichess.config import CONFIG
+from aichess.pytorch_net import PolicyValueNet
 
 
 def run_train(buffer_path: str, out_dir: str):
