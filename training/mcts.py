@@ -48,10 +48,10 @@ class MCTS:
         p, v = fut.result()
         return p, v
 
-    def run(self, fen: str, temperature: float = 1.0) -> Tuple[np.ndarray, int]:
+    def run(self, fen: str, temperature: float = 1.0) -> Tuple[np.ndarray, int, float]:
         b, side = parse_fen(fen)
         planes = board_to_planes(b, side)
-        policy, _ = self.infer(planes)
+        policy, v0 = self.infer(planes)
 
         root = Node(0.0)
         legal = generate_legal_moves(b, side)
@@ -186,6 +186,6 @@ class MCTS:
                 action = int(np.random.choice(np.arange(8100), p=probs))
             else:
                 action = int(np.argmax(visits))
-        return visits, action
+        return visits, action, float(v0)
 
 

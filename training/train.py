@@ -74,6 +74,8 @@ def main():
     parser.add_argument('--segment_k', type=int, default=2000, help='Train/ckpt every K self-play games per rank')
     parser.add_argument('--envs_per_rank', type=int, default=4, help='Parallel self-play environments per rank')
     parser.add_argument('--log_steps', action='store_true', help='Log every self-play step')
+    parser.add_argument('--resume', type=str, default='', help='Path to checkpoint to resume (seg_*.pt or model_epoch_*.pt)')
+    parser.add_argument('--resume_latest', action='store_true', help='Resume from latest ckpt found in --out directory')
     args = parser.parse_args()
 
     setup_ddp()
@@ -91,11 +93,57 @@ def main():
     net = DDP(net, device_ids=[device.index]) if world > 1 else net
 
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr)
-    # loss: policy cross-entropy + value MSE
+    # loss: policy CE + value MSE (+ optional bootstrap + reward shaping)
     def loss_fn(p_logits, v_pred, target_p, target_v):
         ce = torch.nn.functional.cross_entropy(p_logits, target_p.argmax(dim=-1))
         mse = torch.nn.functional.mse_loss(v_pred, target_v.squeeze(-1))
         return ce + mse
+
+    # knobs for signal shaping
+    reward_w = 0.01  # small weight on per-step reward
+    bootstrap_w = 0.1  # weight on value bootstrap
+
+    # optional resume
+    def _load_ckpt(path: str):
+        ckpt = torch.load(path, map_location=device)
+        sd = ckpt.get('state_dict', ckpt)
+        (net.module if isinstance(net, DDP) else net).load_state_dict(sd, strict=False)
+        if 'optimizer' in ckpt:
+            try:
+                opt.load_state_dict(ckpt['optimizer'])
+            except Exception:
+                pass
+        if rank == 0:
+            tqdm.write(f"[Rank0] Resumed from {path}")
+
+    if args.resume_latest and rank == 0:
+        # find newest ckpt in out_dir (segments or epoch)
+        candidates = []
+        for p in out_dir.glob('model_epoch_*.pt'):
+            candidates.append(p)
+        for p in (out_dir / 'segments').glob('seg_*.pt') if (out_dir / 'segments').exists() else []:
+            candidates.append(p)
+        if candidates:
+            latest = max(candidates, key=lambda p: p.stat().st_mtime)
+            args.resume = str(latest)
+    # broadcast resume path
+    if dist.is_initialized():
+        import torch.distributed as _dist
+        t = torch.tensor([len(args.resume)], dtype=torch.int32, device=device)
+        _dist.broadcast(t, src=0)
+        n = int(t.item())
+        if rank != 0:
+            args.resume = ''
+        if n > 0:
+            if rank == 0:
+                b = torch.tensor(list(bytearray(args.resume, 'utf-8')), dtype=torch.uint8, device=device)
+            else:
+                b = torch.empty(n, dtype=torch.uint8, device=device)
+            _dist.broadcast(b, src=0)
+            if rank != 0:
+                args.resume = bytes(b.tolist()).decode('utf-8')
+    if args.resume:
+        _load_ckpt(args.resume)
 
     # segmented self-play/train alternating
     local_samples: List[Sample] = []
@@ -131,10 +179,13 @@ def main():
                                 break
                             produced += 1
                             idx = produced
-                        data = play_one_game(
+                        sp_data, z_final = play_one_game(
                             net.module if isinstance(net, DDP) else net,
                             device,
                             temperature=args.temp,
+                            temp_init=1.0,
+                            temp_final=0.0,
+                            temp_decay_moves=16,
                             max_moves=args.max_moves,
                             mcts_sims=args.mcts_sims,
                             mcts_batch=args.mcts_batch,
@@ -146,8 +197,17 @@ def main():
                             progress=(rank == 0 and (idx % 10 == 0)),
                         )
                         with lock:
-                            for planes, pi, z in data:
-                                local_samples.append(Sample(planes=planes, policy=pi, value=z))
+                            # compose targets: mix final result z with bootstrap and reward shaping
+                            # sp_data: (planes, pi, v0, reward)
+                            val_target = z_final
+                            # construct per-step value targets
+                            for si, (planes, pi, v0, rew) in enumerate(sp_data):
+                                # bootstrapped value blends with final outcome
+                                vt = (1.0 - bootstrap_w) * val_target + bootstrap_w * v0
+                                # add small step reward (signed by side-to-move alternation)
+                                signed_rew = ((1 if (si % 2 == 0) else -1) * rew)
+                                vt = vt + reward_w * signed_rew
+                                local_samples.append(Sample(planes=planes, policy=pi, value=vt))
                             if pbar: pbar.update(1)
                 except Exception as e:
                     with lock:
