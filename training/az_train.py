@@ -16,12 +16,14 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
+from datetime import datetime
+import json
 
 from .az_config import AZConfig
 from .az_model import XQAZNet
 from .az_mcts import MCTSConfig
 from .az_replay import ReplayBuffer, Sample
-from .az_selfplay import play_one_game
+from .az_selfplay import play_one_game, START_FEN
 from .az_aug import flip_planes_lr, flip_policy_lr
 
 
@@ -115,6 +117,43 @@ def main():
                         if z > 0: stats['wins'] += 1
                         elif z < 0: stats['losses'] += 1
                         else: stats['draws'] += 1
+                        # dump win/loss to jsonl incrementally
+                        try:
+                            import os
+                            if abs(z) > 1e-6:
+                                rec = {
+                                    'timestamp': datetime.utcnow().isoformat()+"Z",
+                                    'seg': int(seg),
+                                    'rank': int(rank),
+                                    'idx': int(produced),
+                                    'result': int(np.sign(z)),
+                                    'reason': int(info.get('reason', 0.0)),
+                                    'plies': int(info.get('plies', 0.0)),
+                                    'caps': int(info.get('caps', 0.0)),
+                                    'moves': info.get('moves', []),
+                                    'start_fen': START_FEN,
+                                    'mcts': {
+                                        'num_simulations': int(mcts_cfg.num_simulations),
+                                        'cpuct': float(mcts_cfg.cpuct),
+                                        'dirichlet_alpha': float(mcts_cfg.dirichlet_alpha),
+                                        'dirichlet_frac': float(mcts_cfg.dirichlet_frac),
+                                        'cap_boost': float(mcts_cfg.cap_boost),
+                                        'check_boost': float(mcts_cfg.check_boost),
+                                        'fpu_value': float(mcts_cfg.fpu_value),
+                                        'c_base': float(mcts_cfg.c_base),
+                                        'c_init': float(mcts_cfg.c_init),
+                                    },
+                                    'temperature_moves': int(args.temperature_moves),
+                                    'no_capture_draw_plies': int(args.no_capture_draw_plies),
+                                    'envs_per_rank': int(args.envs_per_rank),
+                                    'mcts_batch': int(args.mcts_batch),
+                                }
+                                os.makedirs('datasets', exist_ok=True)
+                                out_path = 'datasets/wl_games_win.jsonl' if z > 0 else 'datasets/wl_games_loss.jsonl'
+                                with open(out_path, 'a') as f:
+                                    f.write(json.dumps(rec, ensure_ascii=False)+"\n")
+                        except Exception:
+                            pass
                         if pbar:
                             avg_p = plies_sum / max(1, produced)
                             avg_c = caps_sum / max(1, produced)
