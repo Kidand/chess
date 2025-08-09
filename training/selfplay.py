@@ -46,7 +46,7 @@ def play_one_game(
     history = []
 
     bar = tqdm(total=max_moves, desc='SP Game', leave=False, dynamic_ncols=True) if progress else None
-    draw_patience = 8  # early-stop if no capture for many plies
+    draw_patience = 16  # relax early-stop to allow more fights
     no_capture_steps = 0
     last_cap = False
     for step_idx in range(max_moves):

@@ -23,6 +23,7 @@ class MCTSConfig:
     dirichlet_alpha: float = 0.3
     dirichlet_frac: float = 0.25
     batch_size: int = 64
+    cap_boost: float = 2.0  # multiply priors of capture moves
 
 
 class Node:
@@ -58,7 +59,11 @@ class MCTS:
         priors = {}
         for m in legal:
             idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
-            priors[idx] = policy[idx]
+            pri = policy[idx]
+            # capture boost at root
+            if b[m.to_row][m.to_col] != '.':
+                pri *= self.config.cap_boost
+            priors[idx] = pri
         s = sum(priors.values()) + 1e-8
         for k in list(priors.keys()):
             priors[k] /= s
@@ -156,11 +161,14 @@ class MCTS:
                     # expand children with priors over legal moves
                     cur_b = leaf_boards[i]
                     cur_side = leaf_sides[i]
-                    pri = {}
-                    legals = generate_legal_moves(cur_b, cur_side)
-                    for m in legals:
-                        idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
-                        pri[idx] = p[idx]
+                pri = {}
+                legals = generate_legal_moves(cur_b, cur_side)
+                for m in legals:
+                    idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
+                    val = p[idx]
+                    if cur_b[m.to_row][m.to_col] != '.':
+                        val *= self.config.cap_boost
+                    pri[idx] = val
                     s2 = sum(pri.values()) + 1e-8
                     for k in list(pri.keys()):
                         pri[k] /= s2
