@@ -22,6 +22,7 @@ from .az_model import XQAZNet
 from .az_mcts import MCTSConfig
 from .az_replay import ReplayBuffer, Sample
 from .az_selfplay import play_one_game
+from .az_aug import flip_planes_lr, flip_policy_lr
 
 
 def setup_ddp():
@@ -105,6 +106,8 @@ def main():
                     game = []
                     for s in samples:
                         game.append(Sample(planes=s.planes, policy=s.policy, value=z))
+                        # left-right flip augmentation
+                        game.append(Sample(planes=flip_planes_lr(s.planes), policy=flip_policy_lr(s.policy), value=z))
                     with lock:
                         rb.push_game(game)
                         plies_sum += info.get('plies', 0.0)
