@@ -93,7 +93,7 @@ def main():
         caps_sum = 0.0; plies_sum = 0.0
 
         def worker(wid: int):
-            nonlocal produced
+            nonlocal produced, plies_sum, caps_sum, stats
             try:
                 while True:
                     with lock:
