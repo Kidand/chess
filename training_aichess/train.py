@@ -44,6 +44,7 @@ class TrainPipeline:
         return loss, entropy, kl
 
     def run(self):
+        pbar = tqdm(total=self.game_batch_num, desc='Train', dynamic_ncols=True)
         for i in range(self.game_batch_num):
             # load latest buffer
             while True:
@@ -58,8 +59,10 @@ class TrainPipeline:
             if len(self.data_buffer) > self.batch_size:
                 loss, entropy, kl = self.policy_update()
                 self.policy_value_net.save_model(CONFIG['pytorch_model_path'])
-                tqdm.write(f"train step={i} iters={iters} loss={loss:.4f} entropy={entropy:.4f} kl={kl:.5f} lr_mul={self.lr_multiplier:.3f} buffer={len(self.data_buffer)}")
+                pbar.set_postfix_str(f"iters={iters} loss={loss:.4f} ent={entropy:.4f} kl={kl:.5f} lr_mul={self.lr_multiplier:.3f} buf={len(self.data_buffer)}")
+                pbar.update(1)
             time.sleep(CONFIG['train_update_interval'])
+        pbar.close()
 
 
 if __name__=='__main__':

@@ -56,6 +56,7 @@ class CollectPipeline:
         return list(zip(states, mcts_probs, winners))
 
     def run(self):
+        pbar = tqdm(total=0, desc='Collect', dynamic_ncols=True)
         while True:
             game = self.self_play_one(temp=1.0)
             self.data_buffer.extend(game)
@@ -63,7 +64,10 @@ class CollectPipeline:
             data = {'data_buffer': self.data_buffer, 'iters': self.iters}
             with open(CONFIG['train_data_buffer_path'], 'wb') as f:
                 pickle.dump(data, f)
-            print(f"collect iter={self.iters} len={len(game)} buffer={len(self.data_buffer)}")
+            pbar.total = self.iters
+            pbar.n = self.iters
+            pbar.set_postfix_str(f"game_len={len(game)} buffer={len(self.data_buffer)}")
+            pbar.refresh()
 
 
 if __name__=='__main__':
