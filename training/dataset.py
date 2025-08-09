@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Sequence
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -20,8 +20,9 @@ class Sample:
 
 
 class ReplayDataset(Dataset):
-    def __init__(self, samples: List[Sample]):
-        self.samples = samples
+    def __init__(self, samples: Sequence[Sample]):
+        # copy to list to avoid external mutation during training
+        self.samples = list(samples)
 
     def __len__(self) -> int:
         return len(self.samples)
