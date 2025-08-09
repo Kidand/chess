@@ -25,6 +25,9 @@ class MCTSConfig:
     dirichlet_frac: float = 0.25
     cap_boost: float = 2.0
     check_boost: float = 1.5
+    fpu_value: float = -0.2  # first play urgency value for unvisited children (from current player POV)
+    c_base: float = 19652.0
+    c_init: float = 1.25
 
 
 class Node:
@@ -64,7 +67,7 @@ class AZMCTS:
             vv = float(v.float().cpu().numpy()[0])
         return p, vv
 
-    def run(self, fen: str, temperature: float = 1.0) -> Tuple[np.ndarray, int, float]:
+    def run(self, fen: str, temperature: float = 1.0, apply_root_noise: bool = True) -> Tuple[np.ndarray, int, float]:
         b, side = parse_fen(fen)
         planes = board_to_planes(b, side)
         policy, v0 = self._infer(planes)
@@ -88,7 +91,7 @@ class AZMCTS:
         for k in list(priors.keys()):
             priors[k] /= s
         # Dirichlet noise at root
-        if len(priors) > 0 and self.cfg.dirichlet_frac > 0.0:
+        if apply_root_noise and len(priors) > 0 and self.cfg.dirichlet_frac > 0.0:
             noise = np.random.dirichlet([self.cfg.dirichlet_alpha] * len(priors))
             keys = list(priors.keys())
             for i, k in enumerate(keys):
@@ -108,7 +111,10 @@ class AZMCTS:
                 best_k = None
                 best_child = None
                 for k, ch in node.children.items():
-                    ucb = ch.value() + self.cfg.cpuct * ch.prior * math.sqrt(total) / (1 + ch.visit)
+                    q = ch.value() if ch.visit > 0 else self.cfg.fpu_value
+                    # AlphaZero cpuct schedule
+                    cpuct_eff = self.cfg.cpuct * (math.log((total + self.cfg.c_base + 1.0) / self.cfg.c_base) + self.cfg.c_init)
+                    ucb = q + cpuct_eff * ch.prior * math.sqrt(total) / (1 + ch.visit)
                     if ucb > best_ucb:
                         best_ucb = ucb; best_k = k; best_child = ch
                 assert best_k is not None and best_child is not None

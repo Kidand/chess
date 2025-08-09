@@ -65,6 +65,9 @@ def main():
         net.load_state_dict(sd, strict=False)
     net = DDP(net, device_ids=[device.index]) if world > 1 else net
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=1e-4)
+    # cosine LR schedule with warmup
+    steps_per_epoch_est = 1000
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.segments * args.epochs * steps_per_epoch_est, eta_min=args.lr * 0.1)
 
     def loss_fn(p_logits, v_pred, target_p, target_v):
         ce = torch.nn.functional.cross_entropy(p_logits, target_p.argmax(dim=-1))
@@ -142,6 +145,7 @@ def main():
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
                 opt.step()
+                scheduler.step()
                 steps += 1
             if rank == 0:
                 dt = time.time() - t0
