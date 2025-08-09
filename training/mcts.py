@@ -11,7 +11,7 @@ import math
 import numpy as np
 import torch
 
-from backend.xiangqi import parse_fen, generate_legal_moves, other
+from backend.xiangqi import parse_fen, generate_legal_moves, other, is_in_check
 from backend.encoding import board_to_planes, move_to_index, index_to_move
 from .eval_pool import BatchedEvaluator
 
@@ -24,6 +24,7 @@ class MCTSConfig:
     dirichlet_frac: float = 0.25
     batch_size: int = 64
     cap_boost: float = 2.0  # multiply priors of capture moves
+    check_boost: float = 1.5  # multiply priors of checking moves
 
 
 class Node:
@@ -63,6 +64,14 @@ class MCTS:
             # capture boost at root
             if b[m.to_row][m.to_col] != '.':
                 pri *= self.config.cap_boost
+            # checking boost at root
+            # simulate move
+            brd = [row[:] for row in b]
+            brd[m.to_row][m.to_col] = brd[m.from_row][m.from_col]
+            brd[m.from_row][m.from_col] = '.'
+            opp = other(side)
+            if is_in_check(brd, opp):
+                pri *= self.config.check_boost
             priors[idx] = pri
         s = sum(priors.values()) + 1e-8
         for k in list(priors.keys()):
@@ -168,6 +177,13 @@ class MCTS:
                     val = p[idx]
                     if cur_b[m.to_row][m.to_col] != '.':
                         val *= self.config.cap_boost
+                    # checking boost
+                    brd2 = [row[:] for row in cur_b]
+                    brd2[m.to_row][m.to_col] = brd2[m.from_row][m.from_col]
+                    brd2[m.from_row][m.from_col] = '.'
+                    opp2 = other(cur_side)
+                    if is_in_check(brd2, opp2):
+                        val *= self.config.check_boost
                     pri[idx] = val
                     s2 = sum(pri.values()) + 1e-8
                     for k in list(pri.keys()):

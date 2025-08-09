@@ -76,6 +76,8 @@ def main():
     parser.add_argument('--log_steps', action='store_true', help='Log every self-play step')
     parser.add_argument('--resume', type=str, default='', help='Path to checkpoint to resume (seg_*.pt or model_epoch_*.pt)')
     parser.add_argument('--resume_latest', action='store_true', help='Resume from latest ckpt found in --out directory')
+    parser.add_argument('--warmup_segments', type=int, default=4, help='Enable temporary advantage shaping for first N segments')
+    parser.add_argument('--adv_reward_w', type=float, default=0.02, help='Weight of temporary advantage reward during warmup')
     args = parser.parse_args()
 
     setup_ddp()
@@ -100,7 +102,7 @@ def main():
         return ce + mse
 
     # knobs for signal shaping
-    reward_w = 0.01  # small weight on per-step reward
+    reward_w = 0.01  # small per-step tactical reward (capture/check)
     bootstrap_w = 0.1  # weight on value bootstrap
 
     # optional resume
@@ -197,16 +199,15 @@ def main():
                             progress=(rank == 0 and (idx % 10 == 0)),
                         )
                         with lock:
+                            # Advantage shaping during early segments: encourage material gain / checks
+                            adv_w = (args.adv_reward_w if (round_idx < args.warmup_segments) else 0.0)
                             # compose targets: mix final result z with bootstrap and reward shaping
                             # sp_data: (planes, pi, v0, reward)
                             val_target = z_final
-                            # construct per-step value targets
                             for si, (planes, pi, v0, rew) in enumerate(sp_data):
-                                # bootstrapped value blends with final outcome
                                 vt = (1.0 - bootstrap_w) * val_target + bootstrap_w * v0
-                                # add small step reward (signed by side-to-move alternation)
                                 signed_rew = ((1 if (si % 2 == 0) else -1) * rew)
-                                vt = vt + reward_w * signed_rew
+                                vt = vt + reward_w * signed_rew + adv_w * signed_rew
                                 local_samples.append(Sample(planes=planes, policy=pi, value=vt))
                             if pbar: pbar.update(1)
                 except Exception as e:
