@@ -1,0 +1,9 @@
+Flask
+flask-cors
+torch
+torchvision
+numpy
+PyYAML
+tqdm
+
+

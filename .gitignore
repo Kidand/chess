@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual Environments
+.venv/
+venv/
+env/
+chess_env/
+ENV/
+
+# OS / Editor
+.DS_Store
+.AppleDouble
+.LSOverride
+.idea/
+.vscode/
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+dist/
+build/
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log

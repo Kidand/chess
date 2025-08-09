@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>中国象棋 - 人机对战（前端）</title>
+  <style>
+    :root { --bg:#f7f3e8; --line:#7b5b34; --red:#c03a2b; --black:#2c3e50; --hilite:#ffd54f; --sel:#4fc3f7; }
+    html,body{ height:100%; margin:0; }
+    body{ display:flex; flex-direction:column; align-items:center; gap:10px; background:var(--bg); font-family:system-ui,-apple-system,Segoe UI,Roboto; }
+    h1{ font-size:20px; margin:10px 0 0; color:#5b4632; }
+    .wrap{ display:flex; gap:16px; flex-wrap:wrap; justify-content:center; align-items:flex-start; }
+    #board{ background:var(--bg); box-shadow:0 10px 30px rgba(0,0,0,.15); border-radius:8px; }
+    .panel{ min-width:300px; background:#fff; border-radius:12px; padding:12px; box-shadow:0 8px 22px rgba(0,0,0,.12); }
+    .row{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin:8px 0; }
+    label{ font-size:14px; color:#3d2f22; }
+    select,button,input{ font-size:14px; padding:8px 10px; border-radius:8px; border:1px solid #d7c9b8; background:#fff; }
+    button{ cursor:pointer; }
+    .log{ height:180px; overflow:auto; background:#faf7f2; border:1px solid #e8dcc9; border-radius:8px; padding:8px; font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+    .badge{ padding:2px 6px; border-radius:6px; font-size:12px; background:#eee; }
+    .hint{ color:#6b543e; font-size:12px; }
+    .footer{ color:#7a6a56; font-size:12px; margin-bottom:10px; }
+  </style>
+</head>
+<body>
+  <h1>中国象棋 · 人机对战</h1>
+  <div class="wrap">
+    <canvas id="board" width="540" height="600"></canvas>
+    <div class="panel">
+      <div class="row"><label>执方：</label>
+        <select id="sideSel">
+          <option value="r">红方（玩家）</option>
+          <option value="b">黑方（玩家）</option>
+        </select>
+        <span class="badge" id="turnBadge">红方走</span>
+      </div>
+      <div class="row"><label>AI深度：</label>
+        <select id="depthSel">
+          <option>2</option>
+          <option selected>3</option>
+          <option>4</option>
+        </select>
+        <label>引擎：</label>
+        <select id="engineSel">
+          <option value="ab" selected>Alpha-Beta</option>
+          <option value="nn">Neural (MCTS)</option>
+        </select>
+      </div>
+      <div class="row"><label>思考时间(毫秒)：</label>
+        <input id="timeBox" type="number" min="100" max="5000" value="1200" style="width:90px"/>
+        <input id="modelInput" placeholder="模型路径（可选）" style="flex:1"/>
+      </div>
+      <div class="row">
+        <button id="newBtn">重新开局</button>
+        <button id="undoBtn">悔棋</button>
+        <button id="hintBtn">提示</button>
+      </div>
+      <div class="row"><span class="hint">操作：点击棋子→点击目标格；再次点击已选中棋子可取消选择。</span></div>
+      <div class="row"><strong>状态：</strong><span id="status">对局中</span></div>
+      <div class="row" style="flex-direction:column; align-items:stretch;">
+        <label>着法记录：</label>
+        <div class="log" id="log"></div>
+      </div>
+      <div class="footer">规则简要：将/帅不照面；士守九宫斜走；象不过河且塞象眼；马走日蹩马脚；炮隔山打炮；兵/卒过河可横走。</div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
+
