@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import threading
 import numpy as np
 
@@ -21,7 +21,7 @@ from backend.encoding import board_to_planes
 from training.az_mcts import AZMCTS, MCTSConfig
 from training.az_model import XQAZNet
 from training.az_aug import flip_planes_lr, flip_policy_lr
-from training.eval_pool import BatchedEvaluator
+# BatchedEvaluator optional; if unavailable, we proceed without it
 
 
 START_FEN = "rheakaehr/9/1c5c1/s1s1s1s1s/9/9/S1S1S1S1S/1C5C1/9/RHEAKAEHR r"
@@ -56,7 +56,7 @@ def setup_ddp():
         dist.init_process_group(backend="nccl")
 
 
-def mcts_selfplay_game(net: torch.nn.Module, device: torch.device, cfg: MCTSConfig, evaluator: BatchedEvaluator,
+def mcts_selfplay_game(net: torch.nn.Module, device: torch.device, cfg: MCTSConfig, evaluator: Optional[object] = None,
                        temperature_moves: int = 12, no_capture_draw_plies: int = 60) -> Tuple[List[Tuple[np.ndarray,np.ndarray,float]], dict]:
     b, side = parse_fen(START_FEN)
     fen = START_FEN
@@ -144,7 +144,7 @@ def main():
         pbar = tqdm(total=args.selfplay_per_seg, desc=f'Seg {seg} Self-Play', dynamic_ncols=True) if rank == 0 else None
         stats = {"wins": 0, "draws": 0, "losses": 0}
         caps_sum = 0.0; plies_sum = 0.0
-        evaluator = BatchedEvaluator(net.module if isinstance(net, DDP) else net, device, max_batch=512)
+        evaluator = None
 
         def worker(wid: int):
             nonlocal produced
@@ -181,7 +181,7 @@ def main():
         threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(args.envs_per_rank)]
         for t in threads: t.start()
         for t in threads: t.join()
-        evaluator.close()
+        # no evaluator to close
         if pbar: pbar.close()
         if errors: raise errors[0]
 
