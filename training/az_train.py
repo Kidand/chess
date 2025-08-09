@@ -80,8 +80,6 @@ def main():
     for seg in range(1, args.segments + 1):
         # self-play with threads per rank
         total_games = args.selfplay_per_seg
-        from training.eval_pool import BatchedEvaluator
-        evaluator = BatchedEvaluator(net.module if isinstance(net, DDP) else net, device, max_batch=args.mcts_batch)
         import threading
         lock = threading.Lock()
         produced = 0
@@ -112,7 +110,6 @@ def main():
         threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(args.envs_per_rank)]
         for t in threads: t.start()
         for t in threads: t.join()
-        evaluator.close()
         if pbar: pbar.close()
         if errors: raise errors[0]
 
