@@ -85,6 +85,8 @@ def main():
         produced = 0
         errors: List[Exception] = []
         pbar = tqdm(total=total_games, desc=f'Self-Play Seg {seg}', dynamic_ncols=True) if rank == 0 else None
+        stats = {"wins": 0, "draws": 0, "losses": 0}
+        caps_sum = 0.0; plies_sum = 0.0
 
         def worker(wid: int):
             nonlocal produced
@@ -94,7 +96,7 @@ def main():
                         if produced >= total_games:
                             break
                         produced += 1
-                    samples, z = play_one_game(net.module if isinstance(net, DDP) else net, device, mcts_cfg,
+                    samples, z, info = play_one_game(net.module if isinstance(net, DDP) else net, device, mcts_cfg,
                                                args.temperature_moves, args.no_capture_draw_plies)
                     # fill final z to each sample (no bootstrap for simplicity in v1)
                     game = []
@@ -102,7 +104,16 @@ def main():
                         game.append(Sample(planes=s.planes, policy=s.policy, value=z))
                     with lock:
                         rb.push_game(game)
-                        if pbar: pbar.update(1)
+                        plies_sum += info.get('plies', 0.0)
+                        caps_sum += info.get('caps', 0.0)
+                        if z > 0: stats['wins'] += 1
+                        elif z < 0: stats['losses'] += 1
+                        else: stats['draws'] += 1
+                        if pbar:
+                            avg_p = plies_sum / max(1, produced)
+                            avg_c = caps_sum / max(1, produced)
+                            pbar.set_postfix_str(f"W/D/L={stats['wins']}/{stats['draws']}/{stats['losses']} avg_plies={avg_p:.1f} avg_caps={avg_c:.2f}")
+                            pbar.update(1)
             except Exception as e:
                 with lock:
                     errors.append(e)
@@ -122,6 +133,7 @@ def main():
             if sampler is not None:
                 sampler.set_epoch(ep + seg)
             it = tqdm(loader, desc=f'Train Seg {seg} Ep {ep+1}', dynamic_ncols=True) if rank == 0 else loader
+            steps = 0; t0 = time.time()
             for x, p, v in it:
                 x = x.to(device); p = p.to(device); v = v.to(device)
                 p_logits, v_pred = net(x)
@@ -130,6 +142,10 @@ def main():
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
                 opt.step()
+                steps += 1
+            if rank == 0:
+                dt = time.time() - t0
+                tqdm.write(f"[Train] seg={seg} ep={ep+1} steps={steps} time={dt:.1f}s it/s={(steps/dt if dt>0 else 0):.1f}")
 
         if rank == 0:
             ckpt = {

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import numpy as np
 import torch
 
@@ -18,12 +18,13 @@ from .az_replay import Sample
 START_FEN = "rheakaehr/9/1c5c1/s1s1s1s1s/9/9/S1S1S1S1S/1C5C1/9/RHEAKAEHR r"
 
 
-def play_one_game(net, device: torch.device, cfg: MCTSConfig, temperature_moves: int, no_capture_draw_plies: int) -> Tuple[List[Sample], float]:
+def play_one_game(net, device: torch.device, cfg: MCTSConfig, temperature_moves: int, no_capture_draw_plies: int) -> Tuple[List[Sample], float, Dict[str, float]]:
     b, side = parse_fen(START_FEN)
     fen = START_FEN
     data: List[Sample] = []
     mcts = AZMCTS(net, device, cfg)
     no_cap = 0
+    caps = 0
 
     for ply in range(512):
         planes = board_to_planes(b, side)
@@ -48,16 +49,18 @@ def play_one_game(net, device: torch.device, cfg: MCTSConfig, temperature_moves:
         cap = 1 if b[tr][tc] != '.' else 0
         b[tr][tc] = b[fr][fc]
         b[fr][fc] = '.'
+        if cap:
+            caps += 1
         side = other(side)
         fen = to_fen(b, side)
         if cap: no_cap = 0
         else:
             no_cap += 1
             if no_cap >= no_capture_draw_plies:
-                return data, 0.0
+                return data, 0.0, {"plies": float(ply+1), "caps": float(caps), "result": 0.0, "reason": 1.0}
         # terminal check
         if not generate_legal_moves(b, side):
-            return data, 1.0
-    return data, 0.0
+            return data, 1.0, {"plies": float(ply+1), "caps": float(caps), "result": 1.0, "reason": 2.0}
+    return data, 0.0, {"plies": float(512), "caps": float(caps), "result": 0.0, "reason": 3.0}
 
 
