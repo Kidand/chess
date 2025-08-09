@@ -59,6 +59,11 @@ class TrainPipeline:
             if len(self.data_buffer) > self.batch_size:
                 loss, entropy, kl = self.policy_update()
                 self.policy_value_net.save_model(CONFIG['pytorch_model_path'])
+                # periodic ckpt
+                if (i+1) % CONFIG['check_freq'] == 0:
+                    tag = f"models/current_policy_batch{i+1}.pt"
+                    os.makedirs('models', exist_ok=True)
+                    self.policy_value_net.save_model(tag)
                 pbar.set_postfix_str(f"iters={iters} loss={loss:.4f} ent={entropy:.4f} kl={kl:.5f} lr_mul={self.lr_multiplier:.3f} buf={len(self.data_buffer)}")
                 pbar.update(1)
             time.sleep(CONFIG['train_update_interval'])

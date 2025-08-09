@@ -12,5 +12,6 @@ CONFIG = {
     'game_batch_num': 3000,      # 训练总步数
     'train_update_interval': 600,# 训练更新间隔秒
     'use_redis': False,
+    'check_freq': 100,           # 每隔多少次训练保存一次留档ckpt
 }
 

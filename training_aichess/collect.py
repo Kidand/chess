@@ -30,6 +30,7 @@ class CollectPipeline:
         states = []
         mcts_probs = []
         winners = []
+        result = 0
         for t in range(512):
             s = self.current_state(b, side)
             move, visits = self.player.get_action(b, side, temp=temp)
@@ -44,21 +45,21 @@ class CollectPipeline:
                     chosen = m; break
             if chosen is None:
                 if not legals:
-                    z = -1.0; winners = [z]*len(states); break
+                    z = -1.0; winners = [z]*len(states); result = -1; break
                 chosen = legals[0]
             cap = (b[tr][tc] != '.')
             b[tr][tc] = b[fr][fc]; b[fr][fc]='.'
             side = other(side)
             if not generate_legal_moves(b, side):
-                z = 1.0; winners = [z]*len(states); break
+                z = 1.0; winners = [z]*len(states); result = 1; break
         if not winners:
-            winners = [0.0]*len(states)
-        return list(zip(states, mcts_probs, winners))
+            winners = [0.0]*len(states); result = 0
+        return list(zip(states, mcts_probs, winners)), result
 
     def run(self):
         pbar = tqdm(total=0, desc='Collect', dynamic_ncols=True)
         while True:
-            game = self.self_play_one(temp=1.0)
+            game, result = self.self_play_one(temp=1.0)
             self.data_buffer.extend(game)
             self.iters += 1
             data = {'data_buffer': self.data_buffer, 'iters': self.iters}
@@ -66,7 +67,8 @@ class CollectPipeline:
                 pickle.dump(data, f)
             pbar.total = self.iters
             pbar.n = self.iters
-            pbar.set_postfix_str(f"game_len={len(game)} buffer={len(self.data_buffer)}")
+            outcome = 'W' if result>0 else ('L' if result<0 else 'D')
+            pbar.set_postfix_str(f"{outcome} game_len={len(game)} buffer={len(self.data_buffer)}")
             pbar.refresh()
 
 
