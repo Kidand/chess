@@ -481,13 +481,6 @@ def ai_move_endpoint():
             return jsonify({"error": "nn engine unavailable"}), 500
         move = best_move_nn(fen, model_path)
         return jsonify({"move": move, "engine": "nn"})
-    elif engine == "aichess":
-        try:
-            from .engine_aichess import best_move_aichess
-            move = best_move_aichess(fen, model_path, use_mcts=True)
-            return jsonify({"move": move, "engine": "aichess"})
-        except Exception as e:
-            return jsonify({"error": f"aichess engine unavailable: {e}"}), 500
     else:
         best, score, nodes, reached_depth = ai_best_move(board, side, max_depth=depth, time_limit_ms=time_ms)
         if best is None:

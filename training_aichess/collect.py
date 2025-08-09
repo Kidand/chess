@@ -1,39 +1,72 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Self-play data collector (aichess-style) for Xiangqi.
 
-English comments per user preference.
-"""
-
-from __future__ import annotations
-
-import os
-import pickle
-import time
+import os, pickle, time, random
 from collections import deque
-from typing import Deque, List
-
+import numpy as np
 from tqdm import tqdm
 
-from ..aichess.collect import CollectPipeline as _ACollect
+from training_aichess.config import CONFIG
+from training_aichess.pytorch_net import PolicyValueNet
+from training_aichess.mcts import MCTSPlayer
+from backend.xiangqi import parse_fen, to_fen, other, generate_legal_moves
+from backend.encoding import board_to_planes
+
+START_FEN = "rheakaehr/9/1c5c1/s1s1s1s1s/9/9/S1S1S1S1S/1C5C1/9/RHEAKAEHR r"
 
 
-def run_collect(output_path: str):
-    cp = _ACollect()
-    bar = tqdm(desc='Collect', dynamic_ncols=True)
-    while True:
-        iters = cp.collect_selfplay_data(n_games=1)
-        # Persist buffer snapshot under new folder
-        data = {'data_buffer': cp.data_buffer, 'iters': cp.iters}
-        os.makedirs(output_path, exist_ok=True)
-        with open(os.path.join(output_path, 'train_data_buffer.pkl'), 'wb') as f:
-            pickle.dump(data, f)
-        bar.set_postfix_str(f"iters={iters} size={len(cp.data_buffer)}")
-        bar.update(1)
-        time.sleep(1)
+class CollectPipeline:
+    def __init__(self):
+        self.data_buffer = deque(maxlen=CONFIG['buffer_size'])
+        self.iters = 0
+        self.net = PolicyValueNet(model_file=CONFIG['pytorch_model_path'])
+        self.player = MCTSPlayer(self.net.policy_value_fn, c_puct=CONFIG['c_puct'], n_playout=CONFIG['play_out'], is_selfplay=1)
+
+    def current_state(self, b, side):
+        return board_to_planes(b, side)
+
+    def self_play_one(self, temp=1.0):
+        b, side = parse_fen(START_FEN)
+        states = []
+        mcts_probs = []
+        winners = []
+        for t in range(512):
+            s = self.current_state(b, side)
+            move, visits = self.player.get_action(b, side, temp=temp)
+            pi = visits / (visits.sum()+1e-12)
+            states.append(s); mcts_probs.append(pi)
+            frfc = move // 90; trtc = move % 90
+            fr, fc = divmod(frfc, 9); tr, tc = divmod(trtc, 9)
+            legals = generate_legal_moves(b, side)
+            chosen = None
+            for m in legals:
+                if m.from_row==fr and m.from_col==fc and m.to_row==tr and m.to_col==tc:
+                    chosen = m; break
+            if chosen is None:
+                if not legals:
+                    z = -1.0; winners = [z]*len(states); break
+                chosen = legals[0]
+            cap = (b[tr][tc] != '.')
+            b[tr][tc] = b[fr][fc]; b[fr][fc]='.'
+            side = other(side)
+            if not generate_legal_moves(b, side):
+                z = 1.0; winners = [z]*len(states); break
+        if not winners:
+            winners = [0.0]*len(states)
+        return list(zip(states, mcts_probs, winners))
+
+    def run(self):
+        while True:
+            game = self.self_play_one(temp=1.0)
+            self.data_buffer.extend(game)
+            self.iters += 1
+            data = {'data_buffer': self.data_buffer, 'iters': self.iters}
+            with open(CONFIG['train_data_buffer_path'], 'wb') as f:
+                pickle.dump(data, f)
+            print(f"collect iter={self.iters} len={len(game)} buffer={len(self.data_buffer)}")
 
 
-if __name__ == '__main__':
-    run_collect('runs/aichess_buffer')
+if __name__=='__main__':
+    CollectPipeline().run()
 
 

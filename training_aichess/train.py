@@ -1,79 +1,68 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Aichess-style trainer wrapper that consumes buffer and trains.
 
-English comments per user preference.
-"""
-
-from __future__ import annotations
-
-import os
-import pickle
-import time
+import time, os, pickle, random
+from collections import deque
+import numpy as np
 from tqdm import tqdm
 
-from aichess.collect import CollectPipeline
-from aichess.collect import zip_array
-from aichess.config import CONFIG
-from aichess.pytorch_net import PolicyValueNet
+from training_aichess.config import CONFIG
+from training_aichess.pytorch_net import PolicyValueNet
 
 
-def run_train(buffer_path: str, out_dir: str):
-    os.makedirs(out_dir, exist_ok=True)
-    net = PolicyValueNet()
-    lr_multiplier = 1.0
-    kl_targ = CONFIG['kl_targ']
-    batch_size = CONFIG['batch_size']
-    epochs = CONFIG['epochs']
-    bar = tqdm(desc='Train', dynamic_ncols=True)
-    while True:
-        # load buffer snapshot
-        try:
-            with open(os.path.join(buffer_path, 'train_data_buffer.pkl'), 'rb') as f:
-                data_file = pickle.load(f)
-            data_buffer = data_file['data_buffer']
-            iters = data_file['iters']
-        except Exception:
-            time.sleep(5); continue
+class TrainPipeline:
+    def __init__(self, init_model=None):
+        self.learn_rate = 1e-3
+        self.lr_multiplier = 1.0
+        self.batch_size = CONFIG['batch_size']
+        self.epochs = CONFIG['epochs']
+        self.kl_targ = CONFIG['kl_targ']
+        self.check_freq = 100
+        self.game_batch_num = CONFIG['game_batch_num']
+        self.buffer_size = CONFIG['buffer_size']
+        self.data_buffer = deque(maxlen=self.buffer_size)
+        if init_model and os.path.exists(init_model):
+            self.policy_value_net = PolicyValueNet(model_file=init_model)
+        else:
+            self.policy_value_net = PolicyValueNet()
 
-        if len(data_buffer) < batch_size:
-            time.sleep(5); continue
+    def policy_update(self):
+        mini_batch = random.sample(self.data_buffer, self.batch_size)
+        state_batch = np.array([d[0] for d in mini_batch]).astype('float32')
+        mcts_probs_batch = np.array([d[1] for d in mini_batch]).astype('float32')
+        winner_batch = np.array([d[2] for d in mini_batch]).astype('float32')
+        old_probs, old_v = self.policy_value_net.policy_value(state_batch)
+        for i in range(self.epochs):
+            loss, entropy = self.policy_value_net.train_step(state_batch, mcts_probs_batch, winner_batch, self.learn_rate*self.lr_multiplier)
+            new_probs, new_v = self.policy_value_net.policy_value(state_batch)
+            kl = np.mean(np.sum(old_probs * (np.log(old_probs+1e-10) - np.log(new_probs+1e-10)), axis=1))
+            if kl > self.kl_targ * 4: break
+        if kl > self.kl_targ*2 and self.lr_multiplier > 0.1:
+            self.lr_multiplier /= 1.5
+        elif kl < self.kl_targ/2 and self.lr_multiplier < 10:
+            self.lr_multiplier *= 1.5
+        return loss, entropy, kl
 
-        # sample minibatch
-        import random
-        mini_batch = random.sample(data_buffer, batch_size)
-        mini_batch = [zip_array.recovery_state_mcts_prob(d) for d in mini_batch]
-        state_batch = [d[0] for d in mini_batch]
-        mcts_probs_batch = [d[1] for d in mini_batch]
-        winner_batch = [d[2] for d in mini_batch]
-
-        # old probs/values for KL
-        old_probs, old_v = net.policy_value(state_batch)
-
-        last_loss = 0.0
-        for _ in range(epochs):
-            loss, entropy = net.train_step(state_batch, mcts_probs_batch, winner_batch, lr=1e-3 * lr_multiplier)
-            new_probs, new_v = net.policy_value(state_batch)
-            import numpy as np
-            kl = (old_probs * (np.log(old_probs + 1e-10) - np.log(new_probs + 1e-10))).sum(axis=1).mean()
-            if kl > kl_targ * 4: break
-            last_loss = float(loss)
-
-        # adapt lr
-        if kl > kl_targ * 2 and lr_multiplier > 0.1:
-            lr_multiplier /= 1.5
-        elif kl < kl_targ / 2 and lr_multiplier < 10:
-            lr_multiplier *= 1.5
-
-        # save
-        out_file = os.path.join(out_dir, f'policy_iter_{iters}.pt')
-        net.save_model(out_file)
-        bar.set_postfix_str(f"iters={iters} kl={kl:.4f} loss={last_loss:.4f} lr_mul={lr_multiplier:.2f} buf={len(data_buffer)}")
-        bar.update(1)
-        time.sleep(1)
+    def run(self):
+        for i in range(self.game_batch_num):
+            # load latest buffer
+            while True:
+                try:
+                    with open(CONFIG['train_data_buffer_path'], 'rb') as f:
+                        data = pickle.load(f)
+                        self.data_buffer = data['data_buffer']
+                        iters = data['iters']
+                    break
+                except Exception:
+                    time.sleep(5)
+            if len(self.data_buffer) > self.batch_size:
+                loss, entropy, kl = self.policy_update()
+                self.policy_value_net.save_model(CONFIG['pytorch_model_path'])
+                tqdm.write(f"train step={i} iters={iters} loss={loss:.4f} entropy={entropy:.4f} kl={kl:.5f} lr_mul={self.lr_multiplier:.3f} buffer={len(self.data_buffer)}")
+            time.sleep(CONFIG['train_update_interval'])
 
 
-if __name__ == '__main__':
-    run_train('runs/aichess_buffer', 'runs/aichess_models')
+if __name__=='__main__':
+    TrainPipeline(init_model=CONFIG['pytorch_model_path']).run()
 
 
