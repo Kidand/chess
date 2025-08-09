@@ -22,6 +22,7 @@ import os
 import math
 from pathlib import Path
 from typing import List
+from collections import deque
 
 import torch
 import torch.nn as nn
@@ -43,8 +44,13 @@ except Exception:
 
 
 def setup_ddp():
-    if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+    """Initialize torch.distributed if environment variables are set."""
+    if dist.is_initialized():
+        return
+    world = int(os.environ.get("WORLD_SIZE", "1"))
+    if world > 1:
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        dist.init_process_group(backend=backend)
 
 
 def cleanup_ddp():
@@ -74,6 +80,7 @@ def main():
     parser.add_argument('--segment_k', type=int, default=2000, help='Train/ckpt every K self-play games per rank')
     parser.add_argument('--envs_per_rank', type=int, default=4, help='Parallel self-play environments per rank')
     parser.add_argument('--log_steps', action='store_true', help='Log every self-play step')
+    parser.add_argument('--replay_size', type=int, default=20000, help='Max samples to keep in replay buffer per rank')
     args = parser.parse_args()
 
     setup_ddp()
@@ -84,11 +91,16 @@ def main():
     if rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
 
-    torch.cuda.set_device(rank % torch.cuda.device_count())
-    device = torch.device('cuda', rank % torch.cuda.device_count())
+    if torch.cuda.is_available():
+        torch.cuda.set_device(rank % torch.cuda.device_count())
+        device = torch.device('cuda', rank % torch.cuda.device_count())
+    else:
+        device = torch.device('cpu')
 
     net = XQAlphaZeroNet(channels=args.channels, num_blocks=args.blocks).to(device)
-    net = DDP(net, device_ids=[device.index]) if world > 1 else net
+    if world > 1:
+        ddp_kwargs = {'device_ids': [device.index]} if device.type == 'cuda' else {}
+        net = DDP(net, **ddp_kwargs)
 
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr)
     # loss: policy cross-entropy + value MSE
@@ -98,7 +110,7 @@ def main():
         return ce + mse
 
     # segmented self-play/train alternating
-    local_samples: List[Sample] = []
+    local_samples: deque[Sample] = deque(maxlen=args.replay_size)
     total_sp = args.selfplay_steps
     seg = max(1, args.segment_k)
     rounds = (total_sp + seg - 1) // seg
@@ -171,7 +183,7 @@ def main():
         net.train()
         if world > 1 and isinstance(net, DDP):
             dist.barrier()
-        dataset = ReplayDataset(local_samples)
+        dataset = ReplayDataset(list(local_samples))
         sampler = DistributedSampler(dataset) if world > 1 else None
         loader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler, shuffle=(sampler is None), num_workers=4, pin_memory=True)
 
@@ -205,7 +217,7 @@ def main():
     # (optional) gather across ranks; here we keep per-rank shards
 
     # training dataloader
-    dataset = ReplayDataset(local_samples)
+    dataset = ReplayDataset(list(local_samples))
     sampler = DistributedSampler(dataset) if world > 1 else None
     loader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler, shuffle=(sampler is None), num_workers=4, pin_memory=True)
 
