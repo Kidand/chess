@@ -50,19 +50,19 @@ def play_one_game(
         if enable_repetition_draw:
             rep_count[fen] = rep_count.get(fen, 0) + 1
             if rep_count[fen] >= 3:
-                return data, 0.0, {"plies": float(ply+1), "caps": float(caps), "result": 0.0, "reason": 4.0, "moves": move_seq}
+                return data, 0.0, {"plies": float(ply+1), "caps": float(caps), "result": 0.0, "reason": 4.0, "moves": move_seq, "winner": ""}
         # resign check (value from side-to-move perspective)
         if v0 <= resign_threshold:
             if side == 'r':
                 red_bad += 1
                 black_bad = 0
                 if red_bad >= resign_consec:
-                    return data, -1.0, {"plies": float(ply+1), "caps": float(caps), "result": -1.0, "reason": 5.0, "moves": move_seq}
+                    return data, -1.0, {"plies": float(ply+1), "caps": float(caps), "result": -1.0, "reason": 5.0, "moves": move_seq, "winner": "b"}
             else:
                 black_bad += 1
                 red_bad = 0
                 if black_bad >= resign_consec:
-                    return data, -1.0, {"plies": float(ply+1), "caps": float(caps), "result": -1.0, "reason": 5.0, "moves": move_seq}
+                    return data, -1.0, {"plies": float(ply+1), "caps": float(caps), "result": -1.0, "reason": 5.0, "moves": move_seq, "winner": "r"}
         else:
             red_bad = 0 if side == 'r' else red_bad
             black_bad = 0 if side == 'b' else black_bad
@@ -77,7 +77,8 @@ def play_one_game(
         if mv is None:
             if not legals:
                 z = -1.0
-                return data, z, {"plies": float(ply+1), "caps": float(caps), "result": z, "reason": 2.0, "moves": move_seq}
+                # No legal move for current side -> other(side) wins
+                return data, z, {"plies": float(ply+1), "caps": float(caps), "result": z, "reason": 2.0, "moves": move_seq, "winner": other(side)}
             mv = legals[0]
             fr, fc, tr, tc = mv.from_row, mv.from_col, mv.to_row, mv.to_col
         cap = 1 if b[tr][tc] != '.' else 0
@@ -94,7 +95,8 @@ def play_one_game(
                 return data, 0.0, {"plies": float(ply+1), "caps": float(caps), "result": 0.0, "reason": 1.0, "moves": move_seq}
         # terminal check
         if not generate_legal_moves(b, side):
-            return data, 1.0, {"plies": float(ply+1), "caps": float(caps), "result": 1.0, "reason": 2.0, "moves": move_seq}
-    return data, 0.0, {"plies": float(512), "caps": float(caps), "result": 0.0, "reason": 3.0, "moves": move_seq}
+            # Side to move has no legal moves -> other(side) wins (the last mover)
+            return data, 1.0, {"plies": float(ply+1), "caps": float(caps), "result": 1.0, "reason": 2.0, "moves": move_seq, "winner": other(side)}
+    return data, 0.0, {"plies": float(512), "caps": float(caps), "result": 0.0, "reason": 3.0, "moves": move_seq, "winner": ""}
 
 

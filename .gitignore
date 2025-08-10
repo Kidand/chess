@@ -37,3 +37,7 @@ build/
 
 # Logs
 *.log
+
+# tools
+tools/game.json
+tools/replay.html

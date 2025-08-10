@@ -138,6 +138,7 @@ def main():
                                     'rank': int(rank),
                                     'idx': int(produced),
                                     'result': int(np.sign(z)),
+                                    'winner': info.get('winner', ''),
                                     'reason': int(info.get('reason', 0.0)),
                                     'plies': int(info.get('plies', 0.0)),
                                     'caps': int(info.get('caps', 0.0)),
