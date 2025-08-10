@@ -16,7 +16,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import numpy as np
 
@@ -131,9 +131,9 @@ def main():
                         # dump win/loss to jsonl incrementally
                         try:
                             import os
-                            if abs(z) > 1e-6:
+                            if z != 0.0:
                                 rec = {
-                                    'timestamp': datetime.utcnow().isoformat()+"Z",
+                                    'timestamp': datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                                     'seg': int(seg),
                                     'rank': int(rank),
                                     'idx': int(produced),
