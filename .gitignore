@@ -15,8 +15,8 @@ htmlcov/
 .venv/
 venv/
 env/
-chess_env/
 ENV/
+chess_env/
 
 # OS / Editor
 .DS_Store

@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler, Dataset
 from tqdm import tqdm
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import numpy as np
 
@@ -31,8 +31,21 @@ from .az_aug import flip_planes_lr, flip_policy_lr
 
 def setup_ddp():
     if not dist.is_initialized():
-        backend = "nccl" if torch.cuda.is_available() else "gloo"
-        dist.init_process_group(backend=backend)
+        # Safer NCCL defaults
+        os.environ.setdefault("NCCL_ASYNC_ERROR_HANDLING", "1")
+        os.environ.setdefault("NCCL_BLOCKING_WAIT", "1")
+        os.environ.setdefault("TORCH_NCCL_BLOCKING_WAIT", "1")
+
+        use_cuda = torch.cuda.is_available() and torch.cuda.device_count() > 0
+        backend = "nccl" if use_cuda else "gloo"
+
+        # Set device BEFORE initializing process group to avoid device-id warnings and mismatches
+        if use_cuda:
+            local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", 0)))
+            local_rank = local_rank % torch.cuda.device_count()
+            torch.cuda.set_device(local_rank)
+
+        dist.init_process_group(backend=backend, timeout=timedelta(minutes=60))
 
 
 def main():
@@ -58,8 +71,10 @@ def main():
     world = dist.get_world_size() if dist.is_initialized() else 1
 
     if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-        torch.cuda.set_device(rank % torch.cuda.device_count())
-        device = torch.device('cuda', rank % torch.cuda.device_count())
+        local_rank = int(os.environ.get("LOCAL_RANK", rank)) % torch.cuda.device_count()
+        # torch.cuda.set_device was already called in setup_ddp, but call again for safety
+        torch.cuda.set_device(local_rank)
+        device = torch.device('cuda', local_rank)
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = torch.device('mps')
     else:
@@ -208,7 +223,16 @@ def main():
             all_lens = [0 for _ in range(world)]
             dist.all_gather_object(all_lens, local_len)
             min_len = min(int(x) for x in all_lens)
-            dataset = _RBSubset(rb, min_len)
+            # Truncate to a multiple of (world * batch_size) to ensure identical number of full batches per rank
+            global_batch = world * args.batch_size
+            max_full = (min_len // global_batch) * global_batch
+            if max_full == 0:
+                # No full batch available; skip this segment's training
+                if rank == 0:
+                    tqdm.write(f"[Train] seg={seg} skipped (insufficient samples across ranks: min_len={min_len})")
+                dist.barrier()
+                continue
+            dataset = _RBSubset(rb, max_full)
             sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, drop_last=True)
         else:
             dataset = rb
