@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 from datetime import datetime
 import json
+import numpy as np
 
 from .az_config import AZConfig
 from .az_model import XQAZNet
@@ -29,7 +30,8 @@ from .az_aug import flip_planes_lr, flip_policy_lr
 
 def setup_ddp():
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        dist.init_process_group(backend=backend)
 
 
 def main():
@@ -54,8 +56,13 @@ def main():
     rank = dist.get_rank() if dist.is_initialized() else 0
     world = dist.get_world_size() if dist.is_initialized() else 1
 
-    torch.cuda.set_device(rank % torch.cuda.device_count())
-    device = torch.device('cuda', rank % torch.cuda.device_count())
+    if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+        torch.cuda.set_device(rank % torch.cuda.device_count())
+        device = torch.device('cuda', rank % torch.cuda.device_count())
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
 
     out_dir = Path(args.out)
     if rank == 0:
@@ -66,7 +73,11 @@ def main():
         ckpt = torch.load(args.resume, map_location=device)
         sd = ckpt.get('state_dict', ckpt)
         net.load_state_dict(sd, strict=False)
-    net = DDP(net, device_ids=[device.index]) if world > 1 else net
+    if world > 1:
+        if device.type == 'cuda':
+            net = DDP(net, device_ids=[device.index])
+        else:
+            net = DDP(net)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=1e-4)
     # cosine LR schedule with warmup
     steps_per_epoch_est = 1000
@@ -172,7 +183,14 @@ def main():
         # train epochs for this segment
         dataset = rb
         sampler = DistributedSampler(dataset) if world > 1 else None
-        loader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler, shuffle=(sampler is None), num_workers=4, pin_memory=True)
+        loader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            sampler=sampler,
+            shuffle=(sampler is None),
+            num_workers=4,
+            pin_memory=(device.type == 'cuda'),
+        )
         for ep in range(args.epochs):
             net.train()
             if sampler is not None:

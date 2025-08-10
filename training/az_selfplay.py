@@ -77,7 +77,7 @@ def play_one_game(
         if mv is None:
             if not legals:
                 z = -1.0
-                return data, z
+                return data, z, {"plies": float(ply+1), "caps": float(caps), "result": z, "reason": 2.0, "moves": move_seq}
             mv = legals[0]
             fr, fc, tr, tc = mv.from_row, mv.from_col, mv.to_row, mv.to_col
         cap = 1 if b[tr][tc] != '.' else 0
