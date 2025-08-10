@@ -102,7 +102,7 @@ def main():
         produced = 0
         errors: List[Exception] = []
         pbar = tqdm(total=total_games, desc=f'Self-Play Seg {seg}', dynamic_ncols=True) if rank == 0 else None
-        stats = {"wins": 0, "draws": 0, "losses": 0}
+        stats = {"red_wins": 0, "black_wins": 0, "draws": 0}
         caps_sum = 0.0; plies_sum = 0.0
 
         def worker(wid: int):
@@ -125,9 +125,13 @@ def main():
                         rb.push_game(game)
                         plies_sum += info.get('plies', 0.0)
                         caps_sum += info.get('caps', 0.0)
-                        if z > 0: stats['wins'] += 1
-                        elif z < 0: stats['losses'] += 1
-                        else: stats['draws'] += 1
+                        winner = info.get('winner', '')
+                        if winner == 'r':
+                            stats['red_wins'] += 1
+                        elif winner == 'b':
+                            stats['black_wins'] += 1
+                        else:
+                            stats['draws'] += 1
                         # dump win/loss to jsonl incrementally
                         try:
                             import os
@@ -169,7 +173,7 @@ def main():
                         if pbar:
                             avg_p = plies_sum / max(1, produced)
                             avg_c = caps_sum / max(1, produced)
-                            pbar.set_postfix_str(f"W/D/L={stats['wins']}/{stats['draws']}/{stats['losses']} avg_plies={avg_p:.1f} avg_caps={avg_c:.2f}")
+                            pbar.set_postfix_str(f"R/B/D={stats['red_wins']}/{stats['black_wins']}/{stats['draws']} avg_plies={avg_p:.1f} avg_caps={avg_c:.2f}")
                             pbar.update(1)
             except Exception as e:
                 with lock:
