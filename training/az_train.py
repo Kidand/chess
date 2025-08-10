@@ -13,6 +13,7 @@ from typing import List
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
@@ -84,9 +85,12 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.segments * args.epochs * steps_per_epoch_est, eta_min=args.lr * 0.1)
 
     def loss_fn(p_logits, v_pred, target_p, target_v):
-        ce = torch.nn.functional.cross_entropy(p_logits, target_p.argmax(dim=-1))
-        mse = torch.nn.functional.mse_loss(v_pred, target_v.squeeze(-1))
-        return ce + mse
+        # Soft-label cross-entropy for policy: -sum(pi * log softmax(logits))
+        target_p = target_p / target_p.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        logp = F.log_softmax(p_logits, dim=-1)
+        policy_loss = -(target_p * logp).sum(dim=-1).mean()
+        value_loss = F.mse_loss(v_pred, target_v.squeeze(-1))
+        return policy_loss + value_loss
 
     # Replay buffer
     rb = ReplayBuffer(capacity=500_000)
