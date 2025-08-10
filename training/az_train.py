@@ -15,7 +15,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler, Dataset
 from tqdm import tqdm
 from datetime import datetime, timezone
 import json
@@ -188,10 +188,31 @@ def main():
         for t in threads: t.join()
         if pbar: pbar.close()
         if errors: raise errors[0]
+        if world > 1:
+            dist.barrier()
 
         # train epochs for this segment
-        dataset = rb
-        sampler = DistributedSampler(dataset) if world > 1 else None
+        # Ensure identical dataset length across ranks to avoid collective mismatches
+        class _RBSubset(Dataset):
+            def __init__(self, base: ReplayBuffer, length: int):
+                self.base = base
+                self.length = max(0, min(length, len(base)))
+            def __len__(self) -> int:
+                return self.length
+            def __getitem__(self, idx: int):
+                return self.base[idx]
+
+        if world > 1:
+            # Gather per-rank lengths and take the global minimum
+            local_len = len(rb)
+            all_lens = [0 for _ in range(world)]
+            dist.all_gather_object(all_lens, local_len)
+            min_len = min(int(x) for x in all_lens)
+            dataset = _RBSubset(rb, min_len)
+            sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, drop_last=True)
+        else:
+            dataset = rb
+            sampler = None
         loader = DataLoader(
             dataset,
             batch_size=args.batch_size,
@@ -199,11 +220,13 @@ def main():
             shuffle=(sampler is None),
             num_workers=4,
             pin_memory=(device.type == 'cuda'),
+            drop_last=(world > 1),
         )
         for ep in range(args.epochs):
             net.train()
             if sampler is not None:
                 sampler.set_epoch(ep + seg)
+                dist.barrier()
             it = tqdm(loader, desc=f'Train Seg {seg} Ep {ep+1}', dynamic_ncols=True) if rank == 0 else loader
             steps = 0; t0 = time.time()
             for x, p, v in it:
