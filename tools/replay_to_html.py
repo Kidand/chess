@@ -3,7 +3,7 @@
 """
 Replay generator: read one game JSON (as saved by training), reconstruct the game
 using backend move rules, and emit a self-contained HTML to replay the game
-step-by-step (5 seconds per move).
+step-by-step (1 second per move).
 
 Usage:
   python tools/replay_to_html.py --input path/to/game.json --output frontend/replay.html
@@ -82,7 +82,7 @@ def reconstruct_states(game: Dict[str, Any]) -> Tuple[List[str], List[Dict[str, 
 
 
 def emit_html(game: Dict[str, Any], states: List[str], applied: List[Dict[str, int]]) -> str:
-    # Minimal self-contained HTML player with 5s interval per move
+    # Minimal self-contained HTML player with 1s interval per move
     # Embed data directly to avoid external dependencies.
     data_js = json.dumps({
         "meta": {
@@ -157,7 +157,7 @@ def emit_html(game: Dict[str, Any], states: List[str], applied: List[Dict[str, i
       <div class=\"row\"><label>进度：</label>
         <span class=\"mono\">第 <span id=\"step\">0</span> 步 / 共 <span id=\"total\"></span> 步</span>
       </div>
-      <div class=\"hint\">提示：点击“开始”后每 5 秒自动前进一步，可随时“暂停”。</div>
+      <div class=\"hint\">提示：点击“开始”后每 1 秒自动前进一步，可随时“暂停”。</div>
     </div>
   </div>
 
@@ -302,7 +302,7 @@ def emit_html(game: Dict[str, Any], states: List[str], applied: List[Dict[str, i
     timer = setInterval(() => {{
       if (cur >= states.length-1) {{ pause(); return; }}
       show(cur+1);
-    }}, 5000); // 5 seconds per move
+    }}, 1000); // 1 second per move
   }}
   function pause() {{ if (timer) {{ clearInterval(timer); timer = null; }} }}
 
@@ -321,8 +321,8 @@ def emit_html(game: Dict[str, Any], states: List[str], applied: List[Dict[str, i
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", "-i", type=str, default="-", help="Input JSON file (or '-' for STDIN)")
-    ap.add_argument("--output", "-o", type=str, default="frontend/replay.html", help="Output HTML path")
+    ap.add_argument("--input", "-i", type=str, default="tools/game.json", help="Input JSON file (or '-' for STDIN)")
+    ap.add_argument("--output", "-o", type=str, default="tools/replay.html", help="Output HTML path")
     args = ap.parse_args()
 
     game = read_game_json(args.input)
