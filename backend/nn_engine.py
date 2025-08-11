@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import math
 from dataclasses import dataclass
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Any
 
 import numpy as np
 import torch
@@ -19,34 +19,8 @@ import torch.nn.functional as F
 
 from .xiangqi import parse_fen
 from .encoding import board_to_planes
-try:
-    # Prefer the new AZ implementation used by training.az_train
-    from training.az_model import XQAZNet as AZTrainNet
-    from training.az_mcts import AZMCTS as MCTS
-    from training.az_mcts import MCTSConfig
-except Exception:
-    AZTrainNet = None
-    MCTS = None
-    MCTSConfig = None
-
-
-@dataclass
-class MCTSConfig:
-    num_simulations: int = 800
-    c_puct: float = 1.5
-    dirichlet_alpha: float = 0.3
-    dirichlet_frac: float = 0.25
-
-
-class Node:
-    def __init__(self, prior: float):
-        self.prior = prior
-        self.visit = 0
-        self.value_sum = 0.0
-        self.children: Dict[int, Node] = {}
-
-    def value(self) -> float:
-        return 0.0 if self.visit == 0 else (self.value_sum / self.visit)
+from training.az_model import XQAZNet
+from training.az_mcts import AZMCTS, MCTSConfig
 
 
 class NNMCTS:
@@ -77,32 +51,24 @@ class NNMCTS:
         p = torch.softmax(p_logits, dim=-1).cpu().numpy()[0]
         return p, float(v.item())
 
-    def run(self, fen: str) -> Dict[str, int]:
-        # Use the training MCTS if available; fallback to single forward prior pick
-        if MCTS is not None:
-            mcts = MCTS(self.net, self.device, MCTSConfig(num_simulations=800))
-            visits, action = mcts.run(fen, temperature=0.0)
-            frfc = int(action // 90); trtc = int(action % 90)
-            fr, fc = divmod(frfc, 9)
-            tr, tc = divmod(trtc, 9)
-            return {"fr": fr, "fc": fc, "tr": tr, "tc": tc}
-        # fallback
-        b, side = parse_fen(fen)
-        planes = board_to_planes(b, side)
-        policy, _ = self.infer(planes)
-        best_idx = int(np.argmax(policy))
-        frfc = best_idx // 90; trtc = best_idx % 90
+    def run(self, fen: str) -> Tuple[Dict[str, int], Dict[str, Any]]:
+        # Use AZ MCTS for move selection
+        mcts = AZMCTS(self.net, self.device, MCTSConfig(num_simulations=800))
+        visits, action, v0 = mcts.run(fen, temperature=0.0)
+        frfc = int(action // 90); trtc = int(action % 90)
         fr, fc = divmod(frfc, 9)
         tr, tc = divmod(trtc, 9)
-        return {"fr": fr, "fc": fc, "tr": tr, "tc": tc}
+        move = {"fr": fr, "fc": fc, "tr": tr, "tc": tc}
+        meta: Dict[str, Any] = {
+            "nodes": int(float(visits.sum())),
+            "score": float(v0),
+        }
+        return move, meta
 
 
 def load_model(model_path: Optional[str]) -> nn.Module:
-    # Build a net compatible with training.az_train checkpoints
-    if AZTrainNet is None:
-        raise RuntimeError("training.az_model.XQAZNet not available")
-    # Default channels/blocks align with az_train defaults; checkpoints carry exact state_dict
-    net = AZTrainNet()
+    # Load AZ network architecture consistent with training/az_model.py
+    net = XQAZNet()
     if torch.cuda.is_available():
         dev = torch.device('cuda')
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -113,31 +79,16 @@ def load_model(model_path: Optional[str]) -> nn.Module:
     if model_path and os.path.isfile(model_path):
         ckpt = torch.load(model_path, map_location=dev)
         if isinstance(ckpt, dict) and "state_dict" in ckpt:
-            sd = ckpt["state_dict"]
+            net.load_state_dict(ckpt["state_dict"], strict=False)
         else:
-            sd = ckpt
-        # Allow partial to be robust across minor diffs
-        missing, unexpected = net.load_state_dict(sd, strict=False)
-        if missing:
-            print(f"[nn_engine] Missing keys: {len(missing)}")
-        if unexpected:
-            print(f"[nn_engine] Unexpected keys: {len(unexpected)}")
+            net.load_state_dict(ckpt, strict=False)
     return net
 
 
-def best_move_nn(fen: str, model_path: Optional[str]) -> Dict[str, int]:
+def best_move_nn(fen: str, model_path: Optional[str]):
     net = load_model(model_path)
     dev = next(net.parameters()).device
-    # Use AZMCTS if available; otherwise fallback to prior pick
-    if MCTS is not None and MCTSConfig is not None:
-        mcts = MCTS(net, dev, MCTSConfig(num_simulations=800))
-        visits, action, _v0 = mcts.run(fen, temperature=0.0)
-        frfc = int(action // 90); trtc = int(action % 90)
-        fr, fc = divmod(frfc, 9)
-        tr, tc = divmod(trtc, 9)
-        return {"fr": fr, "fc": fc, "tr": tr, "tc": tc}
-    else:
-        mcts = NNMCTS(net, dev, MCTSConfig())
-        return mcts.run(fen)
+    mcts = NNMCTS(net, dev, MCTSConfig())
+    return mcts.run(fen)
 
 

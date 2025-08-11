@@ -14,11 +14,21 @@ from typing import List, Optional, Tuple, Dict
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+# Robust import of neural engine in both run modes
 try:
-    # Import within package to ensure availability when running as module
-    from .nn_engine import best_move_nn
-except Exception:
-    best_move_nn = None
+    from backend.nn_engine import best_move_nn, load_model as nn_load_model  # absolute package import
+except Exception as _e1:
+    try:
+        from .nn_engine import best_move_nn, load_model as nn_load_model      # relative when run as module
+    except Exception as _e2:
+        try:
+            import nn_engine as _nne                                         # script run from backend/ folder
+            best_move_nn = _nne.best_move_nn
+            nn_load_model = _nne.load_model
+        except Exception as _e3:
+            print("nn_engine import error:", _e1, "|", _e2, "|", _e3)
+            best_move_nn = None
+            nn_load_model = None
 
 
 app = Flask(__name__)
@@ -36,6 +46,27 @@ def index():
 @app.route('/app.js')
 def frontend_js():
     return send_from_directory(FRONTEND_DIR, 'app.js')
+
+
+@app.route('/load-model', methods=['POST'])
+def load_model_endpoint():
+    data = request.get_json(force=True, silent=True) or {}
+    model_path = data.get('model_path')
+    # Try to load once and report
+    try:
+        if nn_load_model is None:
+            raise RuntimeError("nn engine unavailable")
+        net = nn_load_model(model_path)
+        import torch
+        dev = next(net.parameters()).device
+        arch = type(net).__name__
+        return jsonify({"ok": True, "device": str(dev), "arch": arch})
+    except Exception as e:
+        import traceback, os
+        exists = bool(model_path) and os.path.isfile(model_path)
+        print("/load-model error:", e, "exists=", exists, "path=", model_path)
+        traceback.print_exc()
+        return jsonify({"error": str(e), "exists": exists, "path": model_path}), 500
 
 
 # ======= Data structures =======
@@ -492,10 +523,24 @@ def ai_move_endpoint():
         return jsonify({"error": f"bad fen: {e}"}), 400
 
     if engine == "nn":
-        if best_move_nn is None:
-            return jsonify({"error": "nn engine unavailable"}), 500
-        move = best_move_nn(fen, model_path)
-        return jsonify({"move": move, "engine": "nn"})
+        try:
+            if best_move_nn is None:
+                raise RuntimeError("nn engine unavailable")
+            # log model path existence to backend stdout
+            exists = False
+            try:
+                import os
+                exists = bool(model_path) and os.path.isfile(model_path)
+            except Exception:
+                pass
+            print(f"/ai-move nn: model_path={model_path!r} exists={exists}")
+            move, meta = best_move_nn(fen, model_path)
+            return jsonify({"move": move, "engine": "nn", **meta})
+        except Exception as e:
+            import traceback
+            print("/ai-move nn error:", e)
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
     else:
         best, score, nodes, reached_depth = ai_best_move(board, side, max_depth=depth, time_limit_ms=time_ms)
         if best is None:

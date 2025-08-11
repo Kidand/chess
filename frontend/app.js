@@ -42,6 +42,22 @@ const engineSel = document.getElementById('engineSel');
 const modelInput = document.getElementById('modelInput');
 if (engineSel) engineSel.onchange = () => { ENGINE = engineSel.value; };
 if (modelInput) modelInput.onchange = () => { MODEL_PATH = modelInput.value; };
+// Optional: load model button (verifies the backend can load the file)
+const loadBtn = document.getElementById('loadModelBtn');
+if (loadBtn) loadBtn.onclick = async () => {
+  try{
+    MODEL_PATH = modelInput ? modelInput.value : '';
+    const resp = await fetch(`${BACKEND_URL}/load-model`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model_path: MODEL_PATH }) });
+    const data = await resp.json();
+    if(resp.ok){
+      log(`模型加载成功: ${data.device} | ${data.arch}`);
+    }else{
+      throw new Error(data.error || `HTTP ${resp.status}`);
+    }
+  }catch(e){
+    log(`模型加载失败: ${e.message}`);
+  }
+};
 
 canvas.addEventListener('click', onClick);
 
@@ -408,7 +424,12 @@ async function aiMove(){
     if(!resp.ok){ throw new Error(`HTTP ${resp.status}`); }
     const data = await resp.json();
     if(data && data.move){
-      log(`AI nodes=${data.nodes||0} score=${(data.score||0).toFixed?data.score.toFixed(1):data.score}`);
+      const parts = [];
+      if (data.engine) parts.push(`engine=${data.engine}`);
+      if (typeof data.nodes === 'number' && isFinite(data.nodes)) parts.push(`nodes=${data.nodes}`);
+      if (typeof data.score === 'number' && isFinite(data.score)) parts.push(`score=${data.score.toFixed(1)}`);
+      if (typeof data.depth === 'number' && isFinite(data.depth)) parts.push(`depth=${data.depth}`);
+      if (parts.length) log(`AI ${parts.join(' ')}`);
       makeMove(data.move); draw();
     } else {
       // Fallback: random legal move
