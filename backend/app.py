@@ -9,18 +9,33 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple, Dict
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 try:
-    from nn_engine import best_move_nn
+    # Import within package to ensure availability when running as module
+    from .nn_engine import best_move_nn
 except Exception:
     best_move_nn = None
 
 
 app = Flask(__name__)
 CORS(app)
+# ======= Frontend static (serve index.html and app.js) =======
+FRONTEND_DIR = (Path(__file__).resolve().parents[1] / 'frontend').resolve()
+
+
+@app.route('/')
+def index():
+    # Serve the frontend so that fetch uses same-origin
+    return send_from_directory(FRONTEND_DIR, 'index.html')
+
+
+@app.route('/app.js')
+def frontend_js():
+    return send_from_directory(FRONTEND_DIR, 'app.js')
 
 
 # ======= Data structures =======
@@ -495,7 +510,9 @@ def ai_move_endpoint():
 
 
 if __name__ == "__main__":
-    # Bind to 127.0.0.1:5000
+    # Bind to 127.0.0.1:5000 and print a clickable link to open the frontend
+    url = "http://127.0.0.1:5000/"
+    print(f"Open this link in your browser: {url}")
     app.run(host="127.0.0.1", port=5000, debug=False)
 
 

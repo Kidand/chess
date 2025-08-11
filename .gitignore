@@ -41,3 +41,4 @@ build/
 # tools
 tools/game.json
 tools/replay.html
+runs/

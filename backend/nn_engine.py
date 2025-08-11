@@ -20,10 +20,12 @@ import torch.nn.functional as F
 from .xiangqi import parse_fen
 from .encoding import board_to_planes
 try:
-    from training.model import XQAlphaZeroNet
-    from training.mcts import MCTS, MCTSConfig
+    # Prefer the new AZ implementation used by training.az_train
+    from training.az_model import XQAZNet as AZTrainNet
+    from training.az_mcts import AZMCTS as MCTS
+    from training.az_mcts import MCTSConfig
 except Exception:
-    XQAlphaZeroNet = None
+    AZTrainNet = None
     MCTS = None
     MCTSConfig = None
 
@@ -96,9 +98,11 @@ class NNMCTS:
 
 
 def load_model(model_path: Optional[str]) -> nn.Module:
-    if XQAlphaZeroNet is None:
-        raise RuntimeError("training.model.XQAlphaZeroNet not available")
-    net = XQAlphaZeroNet()
+    # Build a net compatible with training.az_train checkpoints
+    if AZTrainNet is None:
+        raise RuntimeError("training.az_model.XQAZNet not available")
+    # Default channels/blocks align with az_train defaults; checkpoints carry exact state_dict
+    net = AZTrainNet()
     if torch.cuda.is_available():
         dev = torch.device('cuda')
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -109,16 +113,31 @@ def load_model(model_path: Optional[str]) -> nn.Module:
     if model_path and os.path.isfile(model_path):
         ckpt = torch.load(model_path, map_location=dev)
         if isinstance(ckpt, dict) and "state_dict" in ckpt:
-            net.load_state_dict(ckpt["state_dict"], strict=False)
+            sd = ckpt["state_dict"]
         else:
-            net.load_state_dict(ckpt, strict=False)
+            sd = ckpt
+        # Allow partial to be robust across minor diffs
+        missing, unexpected = net.load_state_dict(sd, strict=False)
+        if missing:
+            print(f"[nn_engine] Missing keys: {len(missing)}")
+        if unexpected:
+            print(f"[nn_engine] Unexpected keys: {len(unexpected)}")
     return net
 
 
 def best_move_nn(fen: str, model_path: Optional[str]) -> Dict[str, int]:
     net = load_model(model_path)
     dev = next(net.parameters()).device
-    mcts = NNMCTS(net, dev, MCTSConfig())
-    return mcts.run(fen)
+    # Use AZMCTS if available; otherwise fallback to prior pick
+    if MCTS is not None and MCTSConfig is not None:
+        mcts = MCTS(net, dev, MCTSConfig(num_simulations=800))
+        visits, action, _v0 = mcts.run(fen, temperature=0.0)
+        frfc = int(action // 90); trtc = int(action % 90)
+        fr, fc = divmod(frfc, 9)
+        tr, tc = divmod(trtc, 9)
+        return {"fr": fr, "fc": fc, "tr": tr, "tc": tc}
+    else:
+        mcts = NNMCTS(net, dev, MCTSConfig())
+        return mcts.run(fen)
 
 
