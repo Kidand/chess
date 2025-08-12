@@ -10,8 +10,7 @@ import numpy as np
 import torch
 
 from backend.xiangqi import parse_fen, other, to_fen, generate_legal_moves, is_in_check
-from backend.encoding import board_to_planes, move_to_index
-from backend.policy_planes import num_policy_planes, map_move_to_plane_id, policy_index_from_move
+from backend.encoding import board_to_planes
 from .az_mcts import AZMCTS, MCTSConfig
 from .az_replay import Sample
 
@@ -45,27 +44,7 @@ def play_one_game(
         temp = 1.0 if ply < temperature_moves else 0.0
         visits, action, v0 = mcts.run(fen, temperature=temp)
         pi = visits / (visits.sum() + 1e-12)
-        if getattr(mcts.net, 'policy_head_type', 'flat') == 'structured':
-            # Accurately bucket flat 8100 visits into (K*90) pixels using rule-based mapping of legal moves
-            K = num_policy_planes()
-            pi_struct = np.zeros((K * 90,), dtype=np.float32)
-            legals_for_pi = generate_legal_moves(b, side)
-            mapped_any = False
-            for m in legals_for_pi:
-                plane_id = map_move_to_plane_id(b, side, m.from_row, m.from_col, m.to_row, m.to_col)
-                if plane_id is None:
-                    continue
-                flat_idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
-                pol_idx = policy_index_from_move(plane_id, m.from_row, m.from_col)
-                pi_struct[pol_idx] += float(pi[flat_idx])
-                mapped_any = True
-            if not mapped_any:
-                # Fallback: copy as much as possible
-                n = min(pi_struct.size, pi.size)
-                pi_struct[:n] = pi[:n]
-            data.append(Sample(planes=planes, policy=pi_struct, value=0.0))
-        else:
-            data.append(Sample(planes=planes, policy=pi, value=0.0))
+        data.append(Sample(planes=planes, policy=pi, value=0.0))
         move_seq.append(int(action))
         # repetition tracking (position+side)
         if enable_repetition_draw:

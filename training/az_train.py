@@ -56,7 +56,6 @@ def main():
     parser.add_argument('--selfplay_per_seg', type=int, default=1024)
     parser.add_argument('--channels', type=int, default=256)
     parser.add_argument('--blocks', type=int, default=12)
-    parser.add_argument('--policy_head', type=str, default='flat', choices=['flat','structured'])
     parser.add_argument('--batch_size', type=int, default=2048)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--num_simulations', type=int, default=800)
@@ -85,7 +84,7 @@ def main():
     if rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
 
-    net = XQAZNet(channels=args.channels, blocks=args.blocks, policy_head=args.policy_head).to(device)
+    net = XQAZNet(channels=args.channels, blocks=args.blocks).to(device)
     resume_seg_offset = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
@@ -281,12 +280,9 @@ def main():
                 lb = float(stats['black_wins'])
                 ld = float(stats['draws'])
             vec = torch.tensor([lp, lp_plies, lp_caps, lr, lb, ld], dtype=torch.float64, device=(device if device.type=='cuda' else torch.device('cpu')))
-            err_flag = torch.tensor([1.0 if errors else 0.0], dtype=torch.float64, device=vec.device)
             if world > 1:
                 dist.all_reduce(vec, op=dist.ReduceOp.SUM)
-                dist.all_reduce(err_flag, op=dist.ReduceOp.SUM)
             gp, gplies, gcaps, gr, gb, gd = vec.tolist()
-            any_error = (err_flag.item() > 0.0) if world > 1 else (len(errors) > 0)
             if pbar:
                 pbar.total = global_total
                 delta = int(gp) - pbar.n
@@ -295,14 +291,12 @@ def main():
                 avg_p = (gplies / gp) if gp > 0 else 0.0
                 avg_c = (gcaps / gp) if gp > 0 else 0.0
                 pbar.set_postfix_str(f"R/B/D={int(gr)}/{int(gb)}/{int(gd)} avg_plies={avg_p:.1f} avg_caps={avg_c:.2f}")
-            # exit condition: either all global games finished, or any rank reported error
-            if int(gp) >= global_total or any_error:
+            # exit condition: all threads finished and global progress reached total
+            if not any(t.is_alive() for t in threads) and int(gp) >= global_total:
                 break
             _time.sleep(0.5)
         for t in threads: t.join()
         if pbar: pbar.close()
-        if errors:
-            raise errors[0]
         if errors: raise errors[0]
         if world > 1:
             dist.barrier()

@@ -68,30 +68,20 @@ class NNMCTS:
 
 def load_model(model_path: Optional[str]) -> nn.Module:
     # Load AZ network architecture consistent with training/az_model.py
+    net = XQAZNet()
     if torch.cuda.is_available():
         dev = torch.device('cuda')
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         dev = torch.device('mps')
     else:
         dev = torch.device('cpu')
-
-    # Detect policy head type from checkpoint keys
-    policy_head = 'flat'
-    state_dict = None
+    net.to(dev).eval()
     if model_path and os.path.isfile(model_path):
         ckpt = torch.load(model_path, map_location=dev)
-        state_dict = ckpt.get('state_dict', ckpt) if isinstance(ckpt, dict) else ckpt
-        try:
-            keys = list(state_dict.keys()) if isinstance(state_dict, dict) else []
-            if any(k.startswith('p_conv.') for k in keys):
-                policy_head = 'structured'
-        except Exception:
-            policy_head = 'flat'
-
-    net = XQAZNet(policy_head=policy_head)
-    net.to(dev).eval()
-    if state_dict is not None:
-        net.load_state_dict(state_dict, strict=False)
+        if isinstance(ckpt, dict) and "state_dict" in ckpt:
+            net.load_state_dict(ckpt["state_dict"], strict=False)
+        else:
+            net.load_state_dict(ckpt, strict=False)
     return net
 
 
