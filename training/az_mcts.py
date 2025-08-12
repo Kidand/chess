@@ -101,7 +101,7 @@ class AZMCTS:
         # Simulations
         for _ in range(self.cfg.num_simulations):
             node = root
-            path: List[Tuple[Node, int, str, list]] = []
+            path: List[Tuple[Node, int, str, list]] = []  # (parent, child_key, side_to_move_at_parent, board_before_move)
             cur_b = [row[:] for row in b]
             cur_side = side
             # Select to leaf
@@ -147,17 +147,23 @@ class AZMCTS:
                 for k in list(pri2.keys()): pri2[k] /= s2
                 node.children = {k: Node(v) for k, v in pri2.items()}
 
-            # Backup
-            g = v2
-            for n, _, _, _ in path:
-                n.visit += 1
-                n.value_sum += g
+            # Backup along edges (parent->child), updating child nodes' visits
+            g = v2  # value from the perspective of side to move at leaf
+            for parent, child_k, _, _ in path:
+                child = parent.children[child_k]
+                child.visit += 1
+                child.value_sum += g
                 g = -g
 
         # Extract policy from visits at root
         visits = np.zeros(8100, dtype=np.float32)
         for k, ch in root.children.items():
             visits[k] = ch.visit
+        if visits.sum() <= 0:
+            # Fallback to normalized priors if visits failed to accumulate (shouldn't happen after fix)
+            prior_sum = sum(ch.prior for ch in root.children.values()) + 1e-12
+            for k, ch in root.children.items():
+                visits[k] = ch.prior / prior_sum
         if temperature <= 1e-6:
             action = int(np.argmax(visits))
         else:

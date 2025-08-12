@@ -118,9 +118,12 @@ def main():
         total_games = args.selfplay_per_seg
         import threading
         lock = threading.Lock()
-        produced = 0
+        produced = 0  # scheduled games on this rank
+        completed = 0  # finished games on this rank
         errors: List[Exception] = []
-        pbar = tqdm(total=total_games, desc=f'Self-Play Seg {seg}', dynamic_ncols=True) if rank == 0 else None
+        # Global progress bar on rank 0 shows aggregated progress across all ranks
+        global_total = total_games * world
+        pbar = tqdm(total=global_total, desc=f'Self-Play Seg {seg}', dynamic_ncols=True) if rank == 0 else None
         stats = {"red_wins": 0, "black_wins": 0, "draws": 0}
         caps_sum = 0.0; plies_sum = 0.0
 
@@ -136,10 +139,13 @@ def main():
                                                args.temperature_moves, args.no_capture_draw_plies)
                     # fill final z to each sample (no bootstrap for simplicity in v1)
                     game = []
-                    for s in samples:
-                        game.append(Sample(planes=s.planes, policy=s.policy, value=z))
+                    # Train value from side-to-move perspective at each ply.
+                    # Starting side is red; flip sign for odd plies (black to move).
+                    for ply_idx, s in enumerate(samples):
+                        v_tgt = z if (ply_idx % 2 == 0) else -z
+                        game.append(Sample(planes=s.planes, policy=s.policy, value=v_tgt))
                         # left-right flip augmentation
-                        game.append(Sample(planes=flip_planes_lr(s.planes), policy=flip_policy_lr(s.policy), value=z))
+                        game.append(Sample(planes=flip_planes_lr(s.planes), policy=flip_policy_lr(s.policy), value=v_tgt))
                     with lock:
                         rb.push_game(game)
                         plies_sum += info.get('plies', 0.0)
@@ -151,6 +157,7 @@ def main():
                             stats['black_wins'] += 1
                         else:
                             stats['draws'] += 1
+                        completed += 1
                         # dump win/loss to jsonl incrementally
                         try:
                             import os
@@ -189,18 +196,67 @@ def main():
                                     f.write(json.dumps(rec, ensure_ascii=False)+"\n")
                         except Exception:
                             pass
-                        if pbar:
-                            avg_p = plies_sum / max(1, produced)
-                            avg_c = caps_sum / max(1, produced)
-                            pbar.set_postfix_str(f"R/B/D={stats['red_wins']}/{stats['black_wins']}/{stats['draws']} avg_plies={avg_p:.1f} avg_caps={avg_c:.2f}")
-                            pbar.update(1)
             except Exception as e:
                 with lock:
                     errors.append(e)
 
+        # Aggregated progress monitor across ranks (all ranks participate; rank 0 displays)
+        def monitor_fn():
+            import time as _time
+            while True:
+                # snapshot local counters
+                with lock:
+                    lp = float(completed)
+                    lp_plies = float(plies_sum)
+                    lp_caps = float(caps_sum)
+                    lr = float(stats['red_wins'])
+                    lb = float(stats['black_wins'])
+                    ld = float(stats['draws'])
+                vec = torch.tensor([lp, lp_plies, lp_caps, lr, lb, ld], dtype=torch.float64, device=(device if device.type=='cuda' else torch.device('cpu')))
+                if world > 1:
+                    dist.all_reduce(vec, op=dist.ReduceOp.SUM)
+                gp, gplies, gcaps, gr, gb, gd = vec.tolist()
+                # update bar and postfix (rank 0 only)
+                if pbar:
+                    target_total = global_total
+                    pbar.total = target_total
+                    # Increment to global completed
+                    delta = int(gp) - pbar.n
+                    if delta > 0:
+                        pbar.update(delta)
+                    avg_p = (gplies / gp) if gp > 0 else 0.0
+                    avg_c = (gcaps / gp) if gp > 0 else 0.0
+                    pbar.set_postfix_str(f"R/B/D={int(gr)}/{int(gb)}/{int(gd)} avg_plies={avg_p:.1f} avg_caps={avg_c:.2f}")
+                # exit when all ranks have finished their quotas
+                if int(gp) >= global_total:
+                    break
+                _time.sleep(0.5)
+
         threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(args.envs_per_rank)]
+        mon_thread = threading.Thread(target=monitor_fn, daemon=True)
         for t in threads: t.start()
+        mon_thread.start()
         for t in threads: t.join()
+        stop_monitor = True
+        mon_thread.join()
+        # Final aggregate update after all joins (rank 0 only)
+        if rank == 0 and pbar is not None:
+            with lock:
+                lp = float(completed)
+                lp_plies = float(plies_sum)
+                lp_caps = float(caps_sum)
+                lr = float(stats['red_wins'])
+                lb = float(stats['black_wins'])
+                ld = float(stats['draws'])
+            vec = torch.tensor([lp, lp_plies, lp_caps, lr, lb, ld], dtype=torch.float64, device=(device if device.type=='cuda' else torch.device('cpu')))
+            if world > 1:
+                dist.all_reduce(vec, op=dist.ReduceOp.SUM)
+            gp, gplies, gcaps, gr, gb, gd = vec.tolist()
+            if pbar.n < int(gp):
+                pbar.update(int(gp) - pbar.n)
+            avg_p = (gplies / gp) if gp > 0 else 0.0
+            avg_c = (gcaps / gp) if gp > 0 else 0.0
+            pbar.set_postfix_str(f"R/B/D={int(gr)}/{int(gb)}/{int(gd)} avg_plies={avg_p:.1f} avg_caps={avg_c:.2f}")
         if pbar: pbar.close()
         if errors: raise errors[0]
         if world > 1:
