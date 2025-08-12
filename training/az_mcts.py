@@ -28,6 +28,11 @@ class MCTSConfig:
     fpu_value: float = -0.2  # first play urgency value for unvisited children (from current player POV)
     c_base: float = 19652.0
     c_init: float = 1.25
+    # Capture prior shaping: 'uniform' uses cap_boost for any capture; 'tiered' scales by captured piece type
+    cap_mode: str = "uniform"  # 'uniform' | 'tiered'
+    cap_tier: Optional[Dict[str, float]] = None  # e.g., {'R':2.0,'C':1.6,'H':1.5,'S':1.2,'A':1.1,'E':1.1}
+    # Linear blend to 1.0: effective = 1.0 + (tier_value - 1.0) * cap_tier_scale  (0->1.0, 1->tier)
+    cap_tier_scale: float = 1.0
 
 
 class Node:
@@ -46,6 +51,25 @@ class AZMCTS:
         self.net = net
         self.device = device
         self.cfg = cfg
+
+    def _cap_multiplier(self, board, move) -> float:
+        """Return prior multiplier for captures based on config.
+
+        - 'uniform': cap_boost if destination is occupied.
+        - 'tiered': multiply based on captured piece importance with linear scale.
+        """
+        tr, tc = move.to_row, move.to_col
+        cap = board[tr][tc]
+        if cap == '.':
+            return 1.0
+        if self.cfg.cap_mode == 'tiered':
+            tier = self.cfg.cap_tier or {}
+            key = cap.upper()
+            base = float(tier.get(key, 1.2))  # default small boost if unspecified
+            scale = float(max(0.0, min(1.0, self.cfg.cap_tier_scale)))
+            return 1.0 + (base - 1.0) * scale
+        # uniform
+        return float(self.cfg.cap_boost)
 
     @torch.no_grad()
     def _infer(self, planes: np.ndarray) -> Tuple[np.ndarray, float]:
@@ -78,8 +102,8 @@ class AZMCTS:
         for m in legal:
             idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
             pri = policy[idx]
-            if b[m.to_row][m.to_col] != '.':
-                pri *= self.cfg.cap_boost
+            # Capture prior shaping
+            pri *= self._cap_multiplier(b, m)
             # check boost
             brd = [row[:] for row in b]
             brd[m.to_row][m.to_col] = brd[m.from_row][m.from_col]
@@ -135,8 +159,8 @@ class AZMCTS:
                 for m in legals2:
                     idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
                     val = p2[idx]
-                    if cur_b[m.to_row][m.to_col] != '.':
-                        val *= self.cfg.cap_boost
+                    # Capture prior shaping at expansion
+                    val *= self._cap_multiplier(cur_b, m)
                     brd2 = [row[:] for row in cur_b]
                     brd2[m.to_row][m.to_col] = brd2[m.from_row][m.from_col]
                     brd2[m.from_row][m.from_col] = '.'

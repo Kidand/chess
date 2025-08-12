@@ -85,10 +85,15 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
 
     net = XQAZNet(channels=args.channels, blocks=args.blocks).to(device)
+    resume_seg_offset = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
         sd = ckpt.get('state_dict', ckpt)
         net.load_state_dict(sd, strict=False)
+        try:
+            resume_seg_offset = int(ckpt.get('seg', 0) or 0)
+        except Exception:
+            resume_seg_offset = 0
     if world > 1:
         if device.type == 'cuda':
             net = DDP(net, device_ids=[device.index])
@@ -110,7 +115,31 @@ def main():
     # Replay buffer
     rb = ReplayBuffer(capacity=500_000)
 
-    mcts_cfg = MCTSConfig(num_simulations=args.num_simulations)
+    # helper: build per-segment MCTSConfig with tiered capture shaping and annealing
+    def build_mcts_cfg(seg_idx: int) -> MCTSConfig:
+        # Use global segment index across resumes so that Stage B continues Stage A's annealing
+        global_seg = int(resume_seg_offset) + int(seg_idx)
+        # Segment-based annealing: 1-4 strong, 5-8 half, >=9 off
+        if global_seg <= 4:
+            cap_mode = 'tiered'; cap_tier_scale = 1.0; check_boost = 1.6
+        elif global_seg <= 8:
+            cap_mode = 'tiered'; cap_tier_scale = 0.5; check_boost = 1.3
+        else:
+            cap_mode = 'uniform'; cap_tier_scale = 0.0; check_boost = 1.0
+        cap_tier = {'R': 2.0, 'C': 1.6, 'H': 1.5, 'S': 1.2, 'A': 1.1, 'E': 1.1}
+        return MCTSConfig(
+            num_simulations=args.num_simulations,
+            cpuct=1.8 if global_seg <= 4 else (1.6 if global_seg <= 8 else 1.5),
+            dirichlet_alpha=0.3,
+            dirichlet_frac=0.33 if global_seg <= 4 else (0.25 if global_seg <= 8 else 0.15),
+            fpu_value=-0.1 if global_seg <= 4 else (-0.15 if global_seg <= 8 else -0.2),
+            cap_boost=2.0,
+            check_boost=check_boost,
+            cap_mode=cap_mode,
+            cap_tier=cap_tier,
+            cap_tier_scale=cap_tier_scale,
+        )
+    mcts_cfg = build_mcts_cfg(1)
 
     # segments loop
     for seg in range(1, args.segments + 1):
@@ -135,7 +164,9 @@ def main():
                         if produced >= total_games:
                             break
                         produced += 1
-                    samples, z, info = play_one_game(net.module if isinstance(net, DDP) else net, device, mcts_cfg,
+                    # refresh MCTS config by segment to apply annealing
+                    mcts_cfg_local = build_mcts_cfg(seg)
+                    samples, z, info = play_one_game(net.module if isinstance(net, DDP) else net, device, mcts_cfg_local,
                                                args.temperature_moves, args.no_capture_draw_plies)
                     # fill final z to each sample (no bootstrap for simplicity in v1)
                     game = []
@@ -236,14 +267,11 @@ def main():
                 _time.sleep(0.5)
 
         threads = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(args.envs_per_rank)]
-        mon_thread = threading.Thread(target=monitor_fn, daemon=True)
         for t in threads: t.start()
-        mon_thread.start()
-        for t in threads: t.join()
-        stop_monitor = True
-        mon_thread.join()
-        # Final aggregate update after all joins (rank 0 only)
-        if rank == 0 and pbar is not None:
+        # Main-thread progress aggregation loop (collectives are only called here to keep order identical across ranks)
+        import time as _time
+        while True:
+            # snapshot local counters
             with lock:
                 lp = float(completed)
                 lp_plies = float(plies_sum)
@@ -255,11 +283,19 @@ def main():
             if world > 1:
                 dist.all_reduce(vec, op=dist.ReduceOp.SUM)
             gp, gplies, gcaps, gr, gb, gd = vec.tolist()
-            if pbar.n < int(gp):
-                pbar.update(int(gp) - pbar.n)
-            avg_p = (gplies / gp) if gp > 0 else 0.0
-            avg_c = (gcaps / gp) if gp > 0 else 0.0
-            pbar.set_postfix_str(f"R/B/D={int(gr)}/{int(gb)}/{int(gd)} avg_plies={avg_p:.1f} avg_caps={avg_c:.2f}")
+            if pbar:
+                pbar.total = global_total
+                delta = int(gp) - pbar.n
+                if delta > 0:
+                    pbar.update(delta)
+                avg_p = (gplies / gp) if gp > 0 else 0.0
+                avg_c = (gcaps / gp) if gp > 0 else 0.0
+                pbar.set_postfix_str(f"R/B/D={int(gr)}/{int(gb)}/{int(gd)} avg_plies={avg_p:.1f} avg_caps={avg_c:.2f}")
+            # exit condition: all threads finished and global progress reached total
+            if not any(t.is_alive() for t in threads) and int(gp) >= global_total:
+                break
+            _time.sleep(0.5)
+        for t in threads: t.join()
         if pbar: pbar.close()
         if errors: raise errors[0]
         if world > 1:
