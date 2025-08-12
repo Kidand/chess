@@ -13,9 +13,10 @@ import torch.nn.functional as F
 class ResidualBlock(nn.Module):
     def __init__(self, ch: int):
         super().__init__()
-        self.c1 = nn.Conv2d(ch, ch, 3, padding=1)
+        # No bias because followed by BatchNorm
+        self.c1 = nn.Conv2d(ch, ch, 3, padding=1, bias=False)
         self.b1 = nn.BatchNorm2d(ch)
-        self.c2 = nn.Conv2d(ch, ch, 3, padding=1)
+        self.c2 = nn.Conv2d(ch, ch, 3, padding=1, bias=False)
         self.b2 = nn.BatchNorm2d(ch)
 
     def forward(self, x):
@@ -28,7 +29,8 @@ class XQAZNet(nn.Module):
     def __init__(self, channels: int = 256, blocks: int = 12, policy_head: str = "flat"):
         super().__init__()
         self.stem = nn.Sequential(
-            nn.Conv2d(15, channels, 3, padding=1),
+            # No bias because followed by BatchNorm
+            nn.Conv2d(15, channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(channels),
             nn.ReLU(inplace=True),
         )
@@ -37,7 +39,8 @@ class XQAZNet(nn.Module):
         self.policy_head_type = policy_head
         if policy_head == "flat":
             self.p_head = nn.Sequential(
-                nn.Conv2d(channels, 64, 1),
+                # No bias because followed by BatchNorm
+                nn.Conv2d(channels, 64, 1, bias=False),
                 nn.BatchNorm2d(64),
                 nn.ReLU(inplace=True),
             )
@@ -45,16 +48,20 @@ class XQAZNet(nn.Module):
         elif policy_head == "structured":
             from backend.policy_planes import num_policy_planes
             k = num_policy_planes()
-            self.p_conv = nn.Conv2d(channels, k, 1)
+            # For structured head, bias can be kept False as no BN follows and logits can absorb shift in downstream softmax
+            self.p_conv = nn.Conv2d(channels, k, 1, bias=True)
         else:
             raise ValueError(f"unknown policy_head: {policy_head}")
         # value
         self.v_head = nn.Sequential(
-            nn.Conv2d(channels, 64, 1),
+            # No bias because followed by BatchNorm
+            nn.Conv2d(channels, 64, 1, bias=False),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
         )
-        self.v_fc1 = nn.Linear(64 * 10 * 9, 256)
+        # Global average pooling to (B,64)
+        self.v_pool = nn.AdaptiveAvgPool2d(1)
+        self.v_fc1 = nn.Linear(64, 256)
         self.v_fc2 = nn.Linear(256, 1)
 
     def forward(self, x):
@@ -62,14 +69,15 @@ class XQAZNet(nn.Module):
         x = self.trunk(x)
         if self.policy_head_type == "flat":
             p = self.p_head(x)
-            p = p.view(p.size(0), -1)
+            p = p.flatten(1)
             p = self.p_fc(p)
         else:
             # structured (B, K, H, W) -> flatten to (B, K*H*W)
             p = self.p_conv(x)
-            p = p.view(p.size(0), -1)
+            p = p.flatten(1)
         v = self.v_head(x)
-        v = v.view(v.size(0), -1)
+        v = self.v_pool(v)
+        v = v.flatten(1)
         v = F.relu(self.v_fc1(v))
         v = torch.tanh(self.v_fc2(v)).squeeze(-1)
         return p, v
