@@ -157,16 +157,17 @@ def main():
                             stats['black_wins'] += 1
                         else:
                             stats['draws'] += 1
+                        # assign per-rank sequential index for finished games
+                        current_idx = completed + 1
                         completed += 1
-                        # dump win/loss to jsonl incrementally
+                        # dump win/loss to per-rank jsonl under out_dir/datasets/seg_{seg}
                         try:
-                            import os
                             if z != 0.0:
                                 rec = {
                                     'timestamp': datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                                     'seg': int(seg),
                                     'rank': int(rank),
-                                    'idx': int(produced),
+                                    'idx': int(current_idx),
                                     'result': int(np.sign(z)),
                                     'winner': info.get('winner', ''),
                                     'reason': int(info.get('reason', 0.0)),
@@ -190,9 +191,11 @@ def main():
                                     'envs_per_rank': int(args.envs_per_rank),
                                     'mcts_batch': int(args.mcts_batch),
                                 }
-                                os.makedirs('datasets', exist_ok=True)
-                                out_path = 'datasets/wl_games_win.jsonl' if z > 0 else 'datasets/wl_games_loss.jsonl'
-                                with open(out_path, 'a') as f:
+                                base_dir = (out_dir / 'datasets' / f'seg_{seg}')
+                                base_dir.mkdir(parents=True, exist_ok=True)
+                                shard = f"win_rank{rank}.jsonl" if z > 0 else f"loss_rank{rank}.jsonl"
+                                out_path = base_dir / shard
+                                with open(out_path, 'a', encoding='utf-8') as f:
                                     f.write(json.dumps(rec, ensure_ascii=False)+"\n")
                         except Exception:
                             pass
