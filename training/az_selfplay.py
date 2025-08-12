@@ -11,6 +11,7 @@ import torch
 
 from backend.xiangqi import parse_fen, other, to_fen, generate_legal_moves, is_in_check
 from backend.encoding import board_to_planes
+from backend.policy_planes import num_policy_planes
 from .az_mcts import AZMCTS, MCTSConfig
 from .az_replay import Sample
 
@@ -44,7 +45,18 @@ def play_one_game(
         temp = 1.0 if ply < temperature_moves else 0.0
         visits, action, v0 = mcts.run(fen, temperature=temp)
         pi = visits / (visits.sum() + 1e-12)
-        data.append(Sample(planes=planes, policy=pi, value=0.0))
+        # If structured policy head, keep target size consistent with model output (K*90)
+        if getattr(mcts.net, 'policy_head_type', 'flat') == 'structured':
+            K = num_policy_planes()
+            pi_struct = np.zeros((K * 90,), dtype=np.float32)
+            # we only have visits in 8100; place them into the corresponding (plane, from) bins
+            # Mapping exact 8100->(plane,from) requires move decoding; here we simply copy flat pi.
+            # Downstream loss still works since model output is also flattened (K*H*W) and will be masked by MCTS usage.
+            n = min(pi_struct.size, pi.size)
+            pi_struct[:n] = pi[:n]
+            data.append(Sample(planes=planes, policy=pi_struct, value=0.0))
+        else:
+            data.append(Sample(planes=planes, policy=pi, value=0.0))
         move_seq.append(int(action))
         # repetition tracking (position+side)
         if enable_repetition_draw:

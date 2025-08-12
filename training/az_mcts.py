@@ -15,6 +15,7 @@ import torch
 
 from backend.xiangqi import parse_fen, generate_legal_moves, other, is_in_check
 from backend.encoding import board_to_planes, move_to_index, index_to_move
+from backend.policy_planes import map_move_to_plane_id, policy_index_from_move
 
 
 @dataclass
@@ -51,6 +52,9 @@ class AZMCTS:
         self.net = net
         self.device = device
         self.cfg = cfg
+
+    def _is_structured_policy(self) -> bool:
+        return getattr(self.net, "policy_head_type", "flat") == "structured"
 
     def _cap_multiplier(self, board, move) -> float:
         """Return prior multiplier for captures based on config.
@@ -100,8 +104,17 @@ class AZMCTS:
         legal = generate_legal_moves(b, side)
         priors: Dict[int, float] = {}
         for m in legal:
-            idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
-            pri = policy[idx]
+            # Read prior from policy head (flat or structured)
+            if self._is_structured_policy():
+                plane_id = map_move_to_plane_id(b, side, m.from_row, m.from_col, m.to_row, m.to_col)
+                if plane_id is None:
+                    pri = 1e-9
+                else:
+                    pol_idx = policy_index_from_move(plane_id, m.from_row, m.from_col)
+                    pri = float(policy[pol_idx])
+            else:
+                idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
+                pri = float(policy[idx])
             # Capture prior shaping
             pri *= self._cap_multiplier(b, m)
             # check boost
@@ -110,7 +123,8 @@ class AZMCTS:
             brd[m.from_row][m.from_col] = '.'
             if is_in_check(brd, other(side)):
                 pri *= self.cfg.check_boost
-            priors[idx] = pri
+            k_idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
+            priors[k_idx] = pri
         s = sum(priors.values()) + 1e-12
         for k in list(priors.keys()):
             priors[k] /= s
@@ -157,8 +171,16 @@ class AZMCTS:
             if legals2:
                 pri2: Dict[int, float] = {}
                 for m in legals2:
-                    idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
-                    val = p2[idx]
+                    if self._is_structured_policy():
+                        plane_id = map_move_to_plane_id(cur_b, cur_side, m.from_row, m.from_col, m.to_row, m.to_col)
+                        if plane_id is None:
+                            val = 1e-9
+                        else:
+                            pol_idx = policy_index_from_move(plane_id, m.from_row, m.from_col)
+                            val = float(p2[pol_idx])
+                    else:
+                        idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
+                        val = float(p2[idx])
                     # Capture prior shaping at expansion
                     val *= self._cap_multiplier(cur_b, m)
                     brd2 = [row[:] for row in cur_b]
@@ -166,7 +188,8 @@ class AZMCTS:
                     brd2[m.from_row][m.from_col] = '.'
                     if is_in_check(brd2, other(cur_side)):
                         val *= self.cfg.check_boost
-                    pri2[idx] = val
+                    k_idx = move_to_index(m.from_row, m.from_col, m.to_row, m.to_col)
+                    pri2[k_idx] = val
                 s2 = sum(pri2.values()) + 1e-12
                 for k in list(pri2.keys()): pri2[k] /= s2
                 node.children = {k: Node(v) for k, v in pri2.items()}

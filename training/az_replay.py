@@ -16,7 +16,7 @@ from torch.utils.data import Dataset
 @dataclass
 class Sample:
     planes: np.ndarray  # (15,10,9)
-    policy: np.ndarray  # (8100,)
+    policy: np.ndarray  # (8100,) for flat; or (K*90,) for structured
     value: float
 
 

@@ -56,6 +56,7 @@ def main():
     parser.add_argument('--selfplay_per_seg', type=int, default=1024)
     parser.add_argument('--channels', type=int, default=256)
     parser.add_argument('--blocks', type=int, default=12)
+    parser.add_argument('--policy_head', type=str, default='flat', choices=['flat','structured'])
     parser.add_argument('--batch_size', type=int, default=2048)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--num_simulations', type=int, default=800)
@@ -84,7 +85,7 @@ def main():
     if rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
 
-    net = XQAZNet(channels=args.channels, blocks=args.blocks).to(device)
+    net = XQAZNet(channels=args.channels, blocks=args.blocks, policy_head=args.policy_head).to(device)
     resume_seg_offset = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)

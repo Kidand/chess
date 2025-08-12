@@ -26,7 +26,7 @@ frontend/          # 浏览器前端（Canvas 渲染 + 操作交互）
   app.js
 
 training/          # AlphaZero 训练管线
-  az_model.py      # 策略-价值网络（ResNet 主干）
+  az_model.py      # 策略-价值网络（ResNet 主干，支持 flat/structured 两种 policy 头）
   az_mcts.py       # AlphaZero MCTS（含吃子/将军优先与根噪声；支持分档吃子加权）
   az_selfplay.py   # 自博弈回路（价值以“当前行棋方”为视角）
   az_train.py      # 训练入口（多卡进度汇总、数据写盘与分段聚合）
@@ -88,6 +88,7 @@ torchrun --standalone --nproc_per_node=8 -m training.az_train \
 - `--temperature_moves`：前 N 个半步使用温度 T=1（探索），之后 T=0（贪心）。
 - `--no_capture_draw_plies`：连续无吃子达到该阈值判和。
 - `--resume`：从已有权重恢复训练（`*.pt`）。
+ - `--policy_head`：`flat` 或 `structured`。structured 使用 99 个动作平面输出 policy（更小参数，更易合法性 mask）。默认 `flat`，向后兼容。
 
 
 ### 训练产出
@@ -167,7 +168,9 @@ head -n 1 runs/xq_az_cont/datasets/seg_1/win.jsonl | \
 ### 模型结构（简述）
 - 输入：15 通道（红 7 + 黑 7 + 行棋方 1），棋盘 10×9。
 - 主干：`channels × blocks` 的 ResNet。
-- 策略头：Conv(1×1) + BN + ReLU + 全连接输出 8100 维 logits（90×90 from-to）。
+- 策略头（两种）：
+  - `flat`：Conv(1×1, 64) → BN → ReLU → Flatten(64×10×9) → Linear → 8100 logits（与旧版完全兼容）。
+  - `structured`：Conv(1×1, K=99) → 输出 (B,99,10,9) 展平为 K×90；动作以“方向/步数/棋型”平面编码。
 - 价值头：Conv(1×1) + BN + ReLU + FC(256) + FC(1) + Tanh。
 
 

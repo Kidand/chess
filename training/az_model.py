@@ -25,7 +25,7 @@ class ResidualBlock(nn.Module):
 
 
 class XQAZNet(nn.Module):
-    def __init__(self, channels: int = 256, blocks: int = 12):
+    def __init__(self, channels: int = 256, blocks: int = 12, policy_head: str = "flat"):
         super().__init__()
         self.stem = nn.Sequential(
             nn.Conv2d(15, channels, 3, padding=1),
@@ -34,12 +34,20 @@ class XQAZNet(nn.Module):
         )
         self.trunk = nn.Sequential(*[ResidualBlock(channels) for _ in range(blocks)])
         # policy
-        self.p_head = nn.Sequential(
-            nn.Conv2d(channels, 64, 1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-        )
-        self.p_fc = nn.Linear(64 * 10 * 9, 8100)
+        self.policy_head_type = policy_head
+        if policy_head == "flat":
+            self.p_head = nn.Sequential(
+                nn.Conv2d(channels, 64, 1),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+            )
+            self.p_fc = nn.Linear(64 * 10 * 9, 8100)
+        elif policy_head == "structured":
+            from backend.policy_planes import num_policy_planes
+            k = num_policy_planes()
+            self.p_conv = nn.Conv2d(channels, k, 1)
+        else:
+            raise ValueError(f"unknown policy_head: {policy_head}")
         # value
         self.v_head = nn.Sequential(
             nn.Conv2d(channels, 64, 1),
@@ -52,9 +60,14 @@ class XQAZNet(nn.Module):
     def forward(self, x):
         x = self.stem(x)
         x = self.trunk(x)
-        p = self.p_head(x)
-        p = p.view(p.size(0), -1)
-        p = self.p_fc(p)
+        if self.policy_head_type == "flat":
+            p = self.p_head(x)
+            p = p.view(p.size(0), -1)
+            p = self.p_fc(p)
+        else:
+            # structured (B, K, H, W) -> flatten to (B, K*H*W)
+            p = self.p_conv(x)
+            p = p.view(p.size(0), -1)
         v = self.v_head(x)
         v = v.view(v.size(0), -1)
         v = F.relu(self.v_fc1(v))
