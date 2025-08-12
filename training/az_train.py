@@ -80,7 +80,7 @@ def main():
     else:
         device = torch.device('cpu')
 
-    out_dir = Path(args.out)
+    out_dir = Path(args.out).resolve()
     if rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -264,6 +264,21 @@ def main():
         if errors: raise errors[0]
         if world > 1:
             dist.barrier()
+        # Aggregate per-rank JSONL shards into a single file per result on rank 0
+        try:
+            if rank == 0:
+                seg_dir = out_dir / 'datasets' / f'seg_{seg}'
+                if seg_dir.exists():
+                    for kind in ('win', 'loss'):
+                        merged = seg_dir / f'{kind}.jsonl'
+                        # truncate old merged to avoid duplication if re-run
+                        with open(merged, 'w', encoding='utf-8') as fout:
+                            for shard in sorted(seg_dir.glob(f'{kind}_rank*.jsonl')):
+                                with open(shard, 'r', encoding='utf-8') as fin:
+                                    for line in fin:
+                                        fout.write(line)
+        except Exception:
+            pass
 
         # train epochs for this segment
         # Ensure identical dataset length across ranks to avoid collective mismatches
