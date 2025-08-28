@@ -17,10 +17,36 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .xiangqi import parse_fen
-from .encoding import board_to_planes
-from training.az_model import XQAZNet
-from training.az_mcts import AZMCTS, MCTSConfig
+# Robust imports that work whether loaded as `backend.nn_engine` or `nn_engine`
+# Try absolute package imports first; fall back to local-module imports; finally, fix sys.path.
+try:
+    from backend.xiangqi import parse_fen  # type: ignore
+    from backend.encoding import board_to_planes  # type: ignore
+except Exception as _e1:
+    try:
+        from xiangqi import parse_fen  # type: ignore
+        from encoding import board_to_planes  # type: ignore
+    except Exception as _e2:
+        # Ensure project root is on sys.path then retry absolute imports
+        import sys as _sys
+        from pathlib import Path as _Path
+        _ROOT = str(_Path(__file__).resolve().parents[1])
+        if _ROOT not in _sys.path:
+            _sys.path.insert(0, _ROOT)
+        from backend.xiangqi import parse_fen  # type: ignore
+        from backend.encoding import board_to_planes  # type: ignore
+
+try:
+    from training.az_model import XQAZNet  # type: ignore
+    from training.az_mcts import AZMCTS, MCTSConfig  # type: ignore
+except Exception:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _ROOT = str(_Path(__file__).resolve().parents[1])
+    if _ROOT not in _sys.path:
+        _sys.path.insert(0, _ROOT)
+    from training.az_model import XQAZNet  # type: ignore
+    from training.az_mcts import AZMCTS, MCTSConfig  # type: ignore
 
 
 class NNMCTS:
