@@ -74,21 +74,25 @@ class AZMCTS:
     @torch.no_grad()
     def _infer(self, planes: np.ndarray) -> Tuple[np.ndarray, float]:
         x = torch.from_numpy(planes[None, ...]).to(self.device)
+        # Avoid fp16 autocast on MPS due to potential NaNs/inf; use fp32 on CPU/MPS, fp16 only on CUDA
         use_cuda = x.is_cuda
-        use_mps = (self.device.type == 'mps')
         if use_cuda:
-            ac = torch.autocast(device_type='cuda', dtype=torch.float16)
-        elif use_mps:
-            ac = torch.autocast(device_type='mps', dtype=torch.float16)
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                p_logits, v = self.net(x)
         else:
-            class _Null:
-                def __enter__(self): return None
-                def __exit__(self, *a): return False
-            ac = _Null()
-        with ac:
             p_logits, v = self.net(x)
-            p = torch.softmax(p_logits, dim=-1).float().cpu().numpy()[0]
-            vv = float(v.float().cpu().numpy()[0])
+        p = torch.softmax(p_logits, dim=-1)
+        # sanitize
+        p = torch.where(torch.isfinite(p), p, torch.zeros_like(p))
+        v = torch.where(torch.isfinite(v), v, torch.zeros_like(v))
+        p = p.float().cpu().numpy()[0]
+        vv = float(v.float().cpu().numpy()[0])
+        if not np.isfinite(p).all():
+            p = np.nan_to_num(p, nan=0.0, posinf=0.0, neginf=0.0)
+        s = p.sum() + 1e-12
+        p = p / s
+        if not np.isfinite(vv):
+            vv = 0.0
         return p, vv
 
     def run(self, fen: str, temperature: float = 1.0, apply_root_noise: bool = True) -> Tuple[np.ndarray, int, float]:
