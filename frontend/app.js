@@ -25,6 +25,7 @@ let selected = null; // {r,c}
 let legalMovesCache = null; // speed-up for drawings
 let gameOver = false;
 let moveHistory = [];
+let lastMove = null; // remember last applied move for highlighting
 
 const logEl = document.getElementById('log');
 const statusEl = document.getElementById('status');
@@ -101,6 +102,7 @@ function toFEN(b=board, stm=side){
 
 function newGame(){
   parseFEN(START_FEN);
+  lastMove = null;
   if(humanColor==='b') maybeAITurn();
 }
 
@@ -149,6 +151,11 @@ function drawLine(c1,r1,c2,r2){
 function getCSS(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
 
 function drawPieces(){
+  // Highlight last move (to/from) similar to replay.html
+  if(lastMove){
+    rect(lastMove.tc, lastMove.tr, 26, '#4fc3f7'); // destination
+    rect(lastMove.fc, lastMove.fr, 26, '#ffd54f'); // source
+  }
   // Highlight selection and legal moves
   if(selected){
     const {r,c} = selected;
@@ -368,6 +375,7 @@ function generalsFace(b){
 function makeMove(m){
   const cap = applyMove(board,m);
   moveHistory.push({m,cap});
+  lastMove = m;
   side = other(side);
   selected=null; legalMovesCache=null;
   logMove(m, cap);
@@ -375,11 +383,17 @@ function makeMove(m){
   if(isTerminal(board, side)) endGame();
 }
 
-function undo(){ if(!moveHistory.length||gameOver) return; // undo one ply (player + maybe AI)
-  const last = moveHistory.pop(); undoApplyMove(board,last.m,last.cap); side=other(side);
-  if(moveHistory.length && pieceColor(board[last.m.tr][last.m.tc])===humanColor){
-    const last2 = moveHistory.pop(); undoApplyMove(board,last2.m,last2.cap); side=other(side);
+function undo(){ if(!moveHistory.length||gameOver) return; // undo to ensure it's human's turn
+  const last = moveHistory.pop();
+  undoApplyMove(board,last.m,last.cap);
+  side = other(side);
+  // If after one undo it's still not human's turn, undo one more move
+  if(moveHistory.length && side !== humanColor){
+    const last2 = moveHistory.pop();
+    undoApplyMove(board,last2.m,last2.cap);
+    side = other(side);
   }
+  lastMove = moveHistory.length ? moveHistory[moveHistory.length-1].m : null;
   gameOver=false; draw();
 }
 
